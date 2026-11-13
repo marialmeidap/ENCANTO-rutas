@@ -311,7 +311,50 @@ if numero_etiqueta:
         </div>
         """
 
-        st.markdown(etiqueta_html, unsafe_allow_html=True)
+        
+import textwrap
+import streamlit.components.v1 as components
+
+etiqueta_limpia = textwrap.dedent(etiqueta_html).strip()
+
+documento_etiqueta = f"""
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<style>
+@page {{ size: 100mm 150mm; margin: 0; }}
+html, body {{
+    margin: 0;
+    padding: 0;
+    background: white;
+}}
+.hoja {{
+    width: 100mm;
+    height: 150mm;
+    box-sizing: border-box;
+    overflow: hidden;
+}}
+@media print {{
+    .barra {{ display: none !important; }}
+    html, body {{ width: 100mm; height: 150mm; }}
+    .hoja {{ margin: 0; }}
+}}
+</style>
+</head>
+<body>
+<div class="barra">
+<button onclick="window.print()">
+Imprimir etiqueta 10 × 15 cm
+</button>
+</div>
+<div class="hoja">{etiqueta_limpia}</div>
+</body>
+</html>
+"""
+
+components.html(documento_etiqueta, height=700, scrolling=True)
+
 
         st.warning(
             "Esta es una vista previa. El tamaño y los margenes finales "
