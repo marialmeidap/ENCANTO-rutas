@@ -71,6 +71,7 @@ except Exception as error:
 # 3. FUNCIONES AUXILIARES PARA FIRESTORE
 # ============================================================
 
+
 def cargar_pedidos():
     """Lee los pedidos guardados permanentemente en Firestore."""
     if db is None:
@@ -80,17 +81,17 @@ def cargar_pedidos():
     pedidos_cargados = []
 
     for documento in documentos:
-    pedido = documento.to_dict() or {}
+        pedido = documento.to_dict() or {}
 
-    # Recuperar el número si falta en pedidos antiguos.
-    pedido.setdefault("numero", documento.id)
-    pedido.setdefault("nombre", "Sin nombre")
-    pedido.setdefault("estado", "Pendiente")
+        # Recuperar campos que falten en pedidos antiguos.
+        pedido.setdefault("numero", documento.id)
+        pedido.setdefault("nombre", "Sin nombre")
+        pedido.setdefault("estado", "Pendiente")
 
-    pedido["documento_id"] = documento.id
-    pedidos_cargados.append(pedido)
+        pedido["documento_id"] = documento.id
+        pedidos_cargados.append(pedido)
 
-    # Ordena los pedidos por fecha, del más reciente al más antiguo.
+    # Ordenar por fecha, del más reciente al más antiguo.
     pedidos_cargados.sort(
         key=lambda pedido: pedido.get("fecha_iso", ""),
         reverse=True
