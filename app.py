@@ -529,7 +529,7 @@ if not st.session_state.pedidos:
 for i, p in enumerate(st.session_state.pedidos):
 
     with st.expander(
-        f"{p['numero']} · {p['nombre']} · {p['estado']}"
+        f"{p.get('numero', 'Sin número')} · {p.get('nombre', 'Sin nombre')} · {p.get('estado', 'Pendiente')}"
     ):
 
         st.write("**WhatsApp:**", p.get("telefono", ""))
