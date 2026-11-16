@@ -158,11 +158,10 @@ def solicitar_places(metodo, url, datos=None, campos=None):
         return json.loads(respuesta.read().decode("utf-8"))
 
 
-
 def buscar_direcciones(texto):
     """
-    Busca direcciones, negocios, conjuntos residenciales
-    y puntos de referencia en Colombia mediante Google Places.
+    Busca direcciones, negocios, unidades residenciales
+    y puntos de referencia en Valle del Cauca, Colombia.
     """
     texto = texto.strip()
 
@@ -176,7 +175,19 @@ def buscar_direcciones(texto):
             "input": texto,
             "includedRegionCodes": ["co"],
             "languageCode": "es",
-            "regionCode": "co"
+            "regionCode": "co",
+            "locationBias": {
+                "rectangle": {
+                    "low": {
+                        "latitude": 3.0,
+                        "longitude": -77.5
+                    },
+                    "high": {
+                        "latitude": 4.5,
+                        "longitude": -75.8
+                    }
+                }
+            }
         },
         campos=(
             "suggestions.placePrediction.placeId,"
@@ -199,6 +210,8 @@ def buscar_direcciones(texto):
             })
 
     return sugerencias
+
+
 
 
 
