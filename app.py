@@ -158,12 +158,15 @@ def solicitar_places(metodo, url, datos=None, campos=None):
         return json.loads(respuesta.read().decode("utf-8"))
 
 
+
 def buscar_direcciones(texto):
     """
-    Obtiene sugerencias de direcciones en Colombia.
-    Se necesita tener habilitada Places API (New).
+    Busca direcciones, negocios, conjuntos residenciales
+    y puntos de referencia en Colombia mediante Google Places.
     """
-    if len(texto.strip()) < 4:
+    texto = texto.strip()
+
+    if len(texto) < 3:
         return []
 
     resultado = solicitar_places(
@@ -172,11 +175,13 @@ def buscar_direcciones(texto):
         datos={
             "input": texto,
             "includedRegionCodes": ["co"],
-            "languageCode": "es"
+            "languageCode": "es",
+            "regionCode": "co"
         },
         campos=(
             "suggestions.placePrediction.placeId,"
-            "suggestions.placePrediction.text"
+            "suggestions.placePrediction.text,"
+            "suggestions.placePrediction.structuredFormat"
         )
     )
 
@@ -194,6 +199,7 @@ def buscar_direcciones(texto):
             })
 
     return sugerencias
+
 
 
 def obtener_detalles_lugar(place_id):
