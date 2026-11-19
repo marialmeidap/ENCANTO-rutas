@@ -32,6 +32,11 @@ st.set_page_config(
 # Identificador de la base de datos creada en Google Cloud.
 DATABASE_ID = "encanto-rutas-db"
 
+# Ubicación fija de la bodega de ENCANTO.
+BODEGA_LATITUD = 3.451434246550579
+BODEGA_LONGITUD = -76.53475560410878
+
+
 # La clave se obtiene del secreto configurado en Cloud Run.
 # Nunca escribas la clave real directamente en este archivo.
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
@@ -833,17 +838,115 @@ for i, p in enumerate(st.session_state.pedidos):
             st.session_state.etiqueta = p["numero"]
 
 
+
 # ============================================================
-# 13. CONSTRUIR RUTA CON VARIOS DESTINOS
+# 13. CONSTRUIR Y OPTIMIZAR RUTA CON GOOGLE ROUTES API
 # ============================================================
 
 st.divider()
-st.header("🗺️ Preparar ruta de entregas")
+st.header("🗺️ Preparar ruta optimizada de entregas")
 
 st.write(
-    "Selecciona los pedidos que quieres visitar y genera "
-    "un recorrido de Google Maps con varios destinos."
+    "Selecciona los pedidos que quieres entregar. "
+    "La ruta comenzará en la bodega y Google calculará "
+    "el orden de visita más conveniente."
 )
+
+def consultar_ruta_google(origen, destino, intermedios):
+    """Calcula una ruta y optimiza sus puntos intermedios."""
+
+    if not GOOGLE_MAPS_API_KEY:
+        raise ValueError(
+            "No está configurada GOOGLE_MAPS_API_KEY."
+        )
+
+    url = "https://routes.googleapis.com/directions/v2:computeRoutes"
+
+    datos = {
+        "origin": {
+            "location": {
+                "latLng": {
+                    "latitude": origen[0],
+                    "longitude": origen[1]
+                }
+            }
+        },
+        "destination": {
+            "location": {
+                "latLng": {
+                    "latitude": destino[0],
+                    "longitude": destino[1]
+                }
+            }
+        },
+        "travelMode": "DRIVE",
+        "routingPreference": "TRAFFIC_AWARE",
+        "languageCode": "es",
+        "regionCode": "CO"
+    }
+
+    if intermedios:
+        datos["intermediates"] = [
+            {
+                "location": {
+                    "latLng": {
+                        "latitude": punto[0],
+                        "longitude": punto[1]
+                    }
+                }
+            }
+            for punto in intermedios
+        ]
+
+    # Google puede reorganizar los puntos intermedios.
+    if len(intermedios) >= 2:
+        datos["optimizeWaypointOrder"] = True
+
+    solicitud = urllib.request.Request(
+        url,
+        data=json.dumps(datos).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+            "X-Goog-FieldMask": (
+                "routes.duration,"
+                "routes.distanceMeters,"
+                "routes.optimizedIntermediateWaypointIndex"
+            )
+        },
+        method="POST"
+    )
+
+    with urllib.request.urlopen(
+        solicitud, timeout=30
+    ) as respuesta:
+        resultado = json.loads(
+            respuesta.read().decode("utf-8")
+        )
+
+    rutas = resultado.get("routes", [])
+
+    if not rutas:
+        raise ValueError(
+            "Google no devolvió una ruta para estos destinos."
+        )
+
+    ruta = rutas[0]
+    indices = ruta.get(
+        "optimizedIntermediateWaypointIndex",
+        list(range(len(intermedios)))
+    )
+
+    return {
+        "orden": indices,
+        "duracion_segundos": int(
+            ruta.get("duration", "0s").removesuffix("s")
+        ),
+        "distancia_metros": int(
+            ruta.get("distanceMeters", 0)
+        )
+    }
+
 
 if st.session_state.destinos_ruta:
 
@@ -854,83 +957,239 @@ if st.session_state.destinos_ruta:
     ]
 
     st.write(
-        f"Destinos seleccionados: {len(pedidos_seleccionados)}"
+        f"Destinos seleccionados: "
+        f"{len(pedidos_seleccionados)}"
     )
 
     for pedido in pedidos_seleccionados:
         st.write(
-            f"• {pedido['nombre']} — "
-            f"{pedido['direccion']}, {pedido['ciudad']}"
+            f"• {pedido.get('numero', '')} — "
+            f"{pedido.get('nombre', '')} — "
+            f"{pedido.get('direccion', '')}"
         )
 
-    if st.button("🚚 Abrir ruta en Google Maps", type="primary"):
+    if st.button(
+        "🚚 Optimizar ruta desde la bodega",
+        type="primary"
+    ):
 
-        destinos = []
+        # Solo optimizamos pedidos con coordenadas confirmadas.
+        pedidos_validos = []
+        pedidos_sin_coordenadas = []
 
         for pedido in pedidos_seleccionados:
-            if (
-                pedido.get("latitud") is not None
-                and pedido.get("longitud") is not None
-            ):
-                destino = (
-                    f"{pedido['latitud']},{pedido['longitud']}"
-                )
-            else:
-                destino = ", ".join(
-                    parte.strip()
-                    for parte in [
-                        pedido.get("direccion", ""),
-                        pedido.get("barrio", ""),
-                        pedido.get("ciudad", ""),
-                        "Colombia"
-                    ]
-                    if parte and parte.strip()
-                )
+            lat = pedido.get("latitud")
+            lon = pedido.get("longitud")
 
-            destinos.append(destino)
+            if lat is None or lon is None:
+                pedidos_sin_coordenadas.append(pedido)
+                continue
 
-        if len(destinos) == 1:
-            url_ruta = (
-                "https://www.google.com/maps/dir/?api=1"
-                "&destination="
-                + urllib.parse.quote(destinos[0])
-                + "&travelmode=driving"
+            try:
+                pedidos_validos.append({
+                    "pedido": pedido,
+                    "lat": float(lat),
+                    "lon": float(lon)
+                })
+            except (TypeError, ValueError):
+                pedidos_sin_coordenadas.append(pedido)
+
+        if pedidos_sin_coordenadas:
+            st.error(
+                "Hay pedidos sin coordenadas confirmadas. "
+                "Corrige sus direcciones antes de optimizar."
             )
+
+            for pedido in pedidos_sin_coordenadas:
+                st.write(
+                    f"• {pedido.get('numero', '')} — "
+                    f"{pedido.get('direccion', '')}"
+                )
+
+        elif not pedidos_validos:
+            st.warning(
+                "Selecciona al menos un pedido válido."
+            )
+
+        elif len(pedidos_validos) > 26:
+            st.error(
+                "Por ahora, optimiza un máximo de 26 "
+                "entregas por recorrido."
+            )
+
         else:
-            origen = destinos[0]
-            destino_final = destinos[-1]
-            puntos_intermedios = destinos[1:-1]
-
-            url_ruta = (
-                "https://www.google.com/maps/dir/?api=1"
-                "&origin=" + urllib.parse.quote(origen)
-                + "&destination=" + urllib.parse.quote(destino_final)
-                + "&travelmode=driving"
+            origen_bodega = (
+                BODEGA_LATITUD,
+                BODEGA_LONGITUD
             )
 
-            if puntos_intermedios:
-                url_ruta += "&waypoints=" + urllib.parse.quote(
-                    "|".join(puntos_intermedios)
+            puntos = [
+                (item["lat"], item["lon"])
+                for item in pedidos_validos
+            ]
+
+            mejor_resultado = None
+            mejor_orden = None
+
+            barra = st.progress(0)
+            estado_calculo = st.empty()
+
+            try:
+                # Probamos cada cliente como posible destino final.
+                # Cada consulta compara una ruta que sale de la bodega.
+                total_opciones = len(puntos)
+
+                for indice_final in range(total_opciones):
+                    estado_calculo.caption(
+                        "Comparando posibles recorridos: "
+                        f"{indice_final + 1} de {total_opciones}"
+                    )
+
+                    indices_intermedios = [
+                        i for i in range(total_opciones)
+                        if i != indice_final
+                    ]
+
+                    puntos_intermedios = [
+                        puntos[i]
+                        for i in indices_intermedios
+                    ]
+
+                    resultado = consultar_ruta_google(
+                        origen_bodega,
+                        puntos[indice_final],
+                        puntos_intermedios
+                    )
+
+                    orden_intermedios = [
+                        indices_intermedios[i]
+                        for i in resultado["orden"]
+                    ]
+
+                    orden_completo = (
+                        orden_intermedios + [indice_final]
+                    )
+
+                    if (
+                        mejor_resultado is None
+                        or resultado["duracion_segundos"]
+                        < mejor_resultado["duracion_segundos"]
+                    ):
+                        mejor_resultado = resultado
+                        mejor_orden = orden_completo
+
+                    barra.progress(
+                        (indice_final + 1) / total_opciones
+                    )
+
+                barra.empty()
+                estado_calculo.empty()
+
+                pedidos_ordenados = [
+                    pedidos_validos[i]["pedido"]
+                    for i in mejor_orden
+                ]
+
+                st.session_state["ruta_optimizada"] = [
+                    pedido["numero"]
+                    for pedido in pedidos_ordenados
+                ]
+
+                st.success("Ruta calculada correctamente.")
+
+                st.subheader("Orden recomendado de entregas")
+
+                for numero, pedido in enumerate(
+                    pedidos_ordenados, start=1
+                ):
+                    st.write(
+                        f"{numero}. **{pedido.get('nombre', '')}** "
+                        f"— {pedido.get('direccion', '')}"
+                    )
+
+                minutos = round(
+                    mejor_resultado["duracion_segundos"] / 60
                 )
 
-        st.link_button(
-            "Abrir recorrido en Google Maps",
-            url_ruta,
-            use_container_width=True
-        )
+                kilometros = (
+                    mejor_resultado["distancia_metros"] / 1000
+                )
 
-        st.caption(
-            "Google Maps abrirá los destinos en el orden seleccionado. "
-            "Esta versión no optimiza automáticamente el orden ni "
-            "calcula una ruta optimizada mediante Routes API."
-        )
+                col1, col2 = st.columns(2)
+                col1.metric(
+                    "Tiempo estimado de conducción",
+                    f"{minutos} min"
+                )
+                col2.metric(
+                    "Distancia estimada",
+                    f"{kilometros:.1f} km"
+                )
+
+                # Construimos Google Maps con el orden calculado.
+                destino_final = puntos[mejor_orden[-1]]
+
+                url_ruta = (
+                    "https://www.google.com/maps/dir/?api=1"
+                    "&origin="
+                    + urllib.parse.quote(
+                        f"{BODEGA_LATITUD},{BODEGA_LONGITUD}"
+                    )
+                    + "&destination="
+                    + urllib.parse.quote(
+                        f"{destino_final[0]},{destino_final[1]}"
+                    )
+                    + "&travelmode=driving"
+                )
+
+                if len(mejor_orden) > 1:
+                    waypoints = [
+                        f"{puntos[i][0]},{puntos[i][1]}"
+                        for i in mejor_orden[:-1]
+                    ]
+
+                    url_ruta += (
+                        "&waypoints="
+                        + urllib.parse.quote("|".join(waypoints))
+                    )
+
+                st.link_button(
+                    "📍 Abrir ruta optimizada en Google Maps",
+                    url_ruta,
+                    use_container_width=True
+                )
+
+                st.caption(
+                    "La ruta comienza en la bodega y termina "
+                    "en el último cliente. No incluye regreso "
+                    "automático a la bodega."
+                )
+
+            except urllib.error.HTTPError as error:
+                detalle = error.read().decode(
+                    "utf-8", errors="replace"
+                )
+
+                st.error(
+                    f"Google Routes API devolvió el error "
+                    f"HTTP {error.code}."
+                )
+                st.code(detalle)
+
+            except Exception as error:
+                st.error(
+                    "No fue posible optimizar la ruta."
+                )
+                st.caption(str(error))
 
     if st.button("Limpiar selección de ruta"):
         st.session_state.destinos_ruta = []
+        st.session_state.pop("ruta_optimizada", None)
         st.rerun()
 
 else:
-    st.info("Selecciona al menos un pedido para preparar una ruta.")
+    st.info(
+        "Selecciona al menos un pedido para preparar una ruta."
+    )
 
 
 # ============================================================
