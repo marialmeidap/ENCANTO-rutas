@@ -15,9 +15,9 @@ import urllib.parse
 import urllib.request
 import urllib.error
 
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from google.cloud import firestore
-
 
 # ============================================================
 # 1. CONFIGURACIÓN GENERAL
@@ -301,22 +301,130 @@ else:
 # 7. INDICADORES DEL DASHBOARD
 # ============================================================
 
+
+# ============================================================
+# 7. INDICADORES DEL DASHBOARD
+# ============================================================
+
 pedidos = st.session_state.pedidos
-total = len(pedidos)
+
+hoy = datetime.now(ZoneInfo("America/Bogota")).date()
+
+st.subheader("📅 Consultar pedidos por fecha")
+
+rango_fechas = st.date_input(
+    "Selecciona el periodo (máximo 30 días)",
+    value=(hoy, hoy),
+    max_value=hoy,
+    format="DD/MM/YYYY",
+    key="filtro_periodo_pedidos"
+)
+
+# Streamlit puede devolver una fecha o un rango de dos fechas.
+if isinstance(rango_fechas, (tuple, list)):
+    fecha_inicio = rango_fechas[0]
+    fecha_fin = (
+        rango_fechas[1]
+        if len(rango_fechas) == 2
+        else rango_fechas[0]
+    )
+else:
+    fecha_inicio = rango_fechas
+    fecha_fin = rango_fechas
+
+# Limitar la consulta a un máximo de 30 días.
+if (fecha_fin - fecha_inicio).days > 29:
+    fecha_inicio_consulta = fecha_fin - timedelta(days=29)
+    st.warning(
+        "El periodo máximo es de 30 días. "
+        "Se mostrarán los últimos 30 días del rango seleccionado."
+    )
+else:
+    fecha_inicio_consulta = fecha_inicio
+
+
+def obtener_fecha_pedido(pedido):
+    """Obtiene la fecha del pedido, incluidos registros antiguos."""
+    fecha_iso = pedido.get("fecha_iso")
+
+    if fecha_iso:
+        try:
+            fecha_hora = datetime.fromisoformat(fecha_iso)
+
+            if fecha_hora.tzinfo is not None:
+                fecha_hora = fecha_hora.astimezone(
+                    ZoneInfo("America/Bogota")
+                )
+
+            return fecha_hora.date()
+
+        except (TypeError, ValueError):
+            pass
+
+    fecha_texto = pedido.get("fecha")
+
+    if fecha_texto:
+        try:
+            return datetime.strptime(
+                fecha_texto, "%d/%m/%Y %H:%M"
+            ).date()
+        except (TypeError, ValueError):
+            pass
+
+    return None
+
+
+# Filtrar pedidos por el periodo seleccionado.
+pedidos_periodo = []
+
+for pedido in pedidos:
+    fecha_pedido = obtener_fecha_pedido(pedido)
+
+    if (
+        fecha_pedido is not None
+        and fecha_inicio_consulta <= fecha_pedido <= fecha_fin
+    ):
+        pedidos_periodo.append(pedido)
+
+
+# Calcular indicadores del periodo.
+total = len(pedidos_periodo)
 
 entregados = sum(
     pedido.get("estado") == "Entregado"
-    for pedido in pedidos
+    for pedido in pedidos_periodo
 )
 
 en_camino = sum(
     pedido.get("estado") == "En camino"
-    for pedido in pedidos
+    for pedido in pedidos_periodo
 )
 
 pendientes = sum(
     pedido.get("estado") == "Pendiente"
-    for pedido in pedidos
+    for pedido in pedidos_periodo
+)
+
+novedades = sum(
+    pedido.get("estado") == "Novedad"
+    for pedido in pedidos_periodo
+)
+
+valor_por_cobrar = sum(
+    int(pedido.get("valor", 0) or 0)
+    for pedido in pedidos_periodo
+    if pedido.get("estado") != "Entregado"
+)
+
+valor_entregado = sum(
+    int(pedido.get("valor", 0) or 0)
+    for pedido in pedidos_periodo
+    if pedido.get("estado") == "Entregado"
+)
+
+st.caption(
+    f"Periodo: {fecha_inicio_consulta.strftime('%d/%m/%Y')} "
+    f"al {fecha_fin.strftime('%d/%m/%Y')}"
 )
 
 a, b, c, d = st.columns(4)
@@ -326,7 +434,37 @@ b.metric("✅ Entregados", entregados)
 c.metric("🚚 En camino", en_camino)
 d.metric("⏳ Pendientes", pendientes)
 
+e, f, g = st.columns(3)
+
+e.metric("⚠️ Novedades", novedades)
+f.metric("💰 Por cobrar", f"$ {valor_por_cobrar:,.0f} COP")
+g.metric("💵 Valor entregado", f"$ {valor_entregado:,.0f} COP")
+
+st.markdown("#### 📋 Pedidos del periodo")
+
+if pedidos_periodo:
+    detalle_pedidos = [
+        {
+            "Pedido": pedido.get("numero", ""),
+            "Fecha": pedido.get("fecha", ""),
+            "Cliente": pedido.get("nombre", ""),
+            "Ciudad": pedido.get("ciudad", ""),
+            "Estado": pedido.get("estado", "Pendiente"),
+            "Valor (COP)": int(pedido.get("valor", 0) or 0)
+        }
+        for pedido in pedidos_periodo
+    ]
+
+    st.dataframe(
+        detalle_pedidos,
+        use_container_width=True,
+        hide_index=True
+    )
+else:
+    st.info("No hay pedidos registrados en el periodo seleccionado.")
+
 st.divider()
+
 
 
 # ============================================================
@@ -478,7 +616,7 @@ with st.form("pedido", clear_on_submit=True):
             )
 
         else:
-            ahora = datetime.now()
+            ahora = datetime.now(ZoneInfo("America/Bogota"))
 
             nuevo_pedido = {
                 "numero": str(uuid.uuid4())[:8].upper(),
