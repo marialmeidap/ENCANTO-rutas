@@ -14,6 +14,9 @@ import urllib.parse
 import urllib.request
 import urllib.error
 
+import folium
+from streamlit_folium import st_folium
+
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from google.cloud import firestore
@@ -161,12 +164,8 @@ def solicitar_places(metodo, url, datos=None, campos=None):
 
 
 def buscar_direcciones(texto):
-    """
-    Busca direcciones, negocios, unidades residenciales
-    y puntos de referencia en Valle del Cauca, Colombia.
-    """
+    """Busca direcciones y puntos de referencia con Google Places."""
     texto = texto.strip()
-
     if len(texto) < 3:
         return []
 
@@ -178,16 +177,11 @@ def buscar_direcciones(texto):
             "includedRegionCodes": ["co"],
             "languageCode": "es",
             "regionCode": "co",
+            # Sesgo geográfico amplio para Cali y municipios cercanos.
             "locationBias": {
-                "rectangle": {
-                    "low": {
-                        "latitude": 3.0,
-                        "longitude": -77.5
-                    },
-                    "high": {
-                        "latitude": 4.5,
-                        "longitude": -75.8
-                    }
+                "circle": {
+                    "center": {"latitude": 3.45, "longitude": -76.53},
+                    "radius": 50000.0
                 }
             }
         },
@@ -199,38 +193,61 @@ def buscar_direcciones(texto):
     )
 
     sugerencias = []
-
     for elemento in resultado.get("suggestions", []):
         prediccion = elemento.get("placePrediction", {})
         identificador = prediccion.get("placeId")
         texto_sugerido = prediccion.get("text", {}).get("text", "")
-
         if identificador and texto_sugerido:
             sugerencias.append({
                 "id": identificador,
-                "texto": texto_sugerido
+                "texto": texto_sugerido,
+                "tipo": "place"
             })
+    return sugerencias
 
+
+def buscar_direcciones_aproximadas(texto):
+    """Usa Geocoding API como respaldo si Places no ofrece sugerencias."""
+    if not GOOGLE_MAPS_API_KEY or len(texto.strip()) < 3:
+        return []
+
+    parametros = urllib.parse.urlencode({
+        "address": texto.strip(),
+        "components": "country:CO",
+        "region": "co",
+        "language": "es",
+        "key": GOOGLE_MAPS_API_KEY
+    })
+    url = "https://maps.googleapis.com/maps/api/geocode/json?" + parametros
+    solicitud = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(solicitud, timeout=15) as respuesta:
+        resultado = json.loads(respuesta.read().decode("utf-8"))
+
+    sugerencias = []
+    for item in resultado.get("results", [])[:5]:
+        ubicacion = item.get("geometry", {}).get("location", {})
+        lat = ubicacion.get("lat")
+        lon = ubicacion.get("lng")
+        direccion = item.get("formatted_address", "")
+        if lat is not None and lon is not None and direccion:
+            sugerencias.append({
+                "id": "geocode:" + str(lat) + "," + str(lon),
+                "texto": "📍 Aproximada: " + direccion,
+                "tipo": "geocode",
+                "direccion": direccion,
+                "latitud": float(lat),
+                "longitud": float(lon)
+            })
     return sugerencias
 
 
 def obtener_detalles_lugar(place_id):
-    """
-    Consulta la dirección confirmada y sus coordenadas.
-    Se necesita Places API (New).
-    """
-    url = PLACES_DETAILS_URL + urllib.parse.quote(
-        place_id, safe=""
-    )
-
+    """Consulta la dirección confirmada y sus coordenadas en Places."""
+    url = PLACES_DETAILS_URL + urllib.parse.quote(place_id, safe="")
     resultado = solicitar_places(
-        "GET",
-        url,
-        campos="id,formattedAddress,location,displayName"
+        "GET", url, campos="id,formattedAddress,location,displayName"
     )
-
     ubicacion = resultado.get("location", {})
-
     return {
         "place_id": resultado.get("id", place_id),
         "direccion": resultado.get("formattedAddress", ""),
@@ -254,6 +271,9 @@ if "direccion_confirmada" not in st.session_state:
 
 if "sugerencias_direccion" not in st.session_state:
     st.session_state.sugerencias_direccion = []
+
+if "ubicacion_mapa" not in st.session_state:
+    st.session_state.ubicacion_mapa = None
 
 if "destinos_ruta" not in st.session_state:
     st.session_state.destinos_ruta = []
@@ -542,103 +562,155 @@ st.divider()
 
 st.header("📝 Registrar pedido")
 
-# El campo de dirección está fuera del formulario para permitir
-# que la aplicación muestre sugerencias mientras se escribe.
+# La dirección se mantiene fuera del formulario para que las sugerencias
+# se actualicen al escribir.
 direccion_escrita = st.text_input(
     "Dirección del cliente *",
     key="direccion_input",
-    placeholder="Ej.: Calle 5 # 10-20, Cali"
+    placeholder="Ej.: Calle 5 # 10-20, Cali o un punto de referencia"
 )
 
-# Si cambia el texto, ya no consideramos confirmada la selección
-# anterior. La nueva dirección debe confirmarse nuevamente.
-if (
-    st.session_state.direccion_confirmada
-    and direccion_escrita.strip()
-    != st.session_state.direccion_confirmada.get("texto_busqueda", "")
-):
+# Al cambiar el texto, se descartan coordenadas de una búsqueda anterior.
+texto_actual = direccion_escrita.strip()
+if st.session_state.direccion_confirmada and texto_actual != st.session_state.direccion_confirmada.get("texto_busqueda", ""):
     st.session_state.direccion_confirmada = None
+    st.session_state.ubicacion_mapa = None
 
-# Autocompletado con Google Places.
-if direccion_escrita.strip() and len(direccion_escrita.strip()) >= 4:
-
+if texto_actual and len(texto_actual) >= 3:
     if GOOGLE_MAPS_API_KEY:
         try:
-            sugerencias = buscar_direcciones(direccion_escrita)
+            sugerencias = buscar_direcciones(texto_actual)
+            if not sugerencias:
+                sugerencias = buscar_direcciones_aproximadas(texto_actual)
             st.session_state.sugerencias_direccion = sugerencias
-
         except urllib.error.HTTPError as error:
+            # Aunque las APIs de Google fallen, el usuario puede fijar el punto manualmente.
             st.session_state.sugerencias_direccion = []
             st.warning(
-                "Google Places rechazó la consulta. "
-                "Verifica que Places API (New) esté habilitada "
-                "y que la clave tenga permiso para utilizarla."
+                "Google no devolvió sugerencias para esta dirección. "
+                "Puedes fijar el punto manualmente en el mapa."
             )
             st.caption(f"Código HTTP: {error.code}")
-
         except Exception as error:
             st.session_state.sugerencias_direccion = []
-            st.warning("No se pudieron cargar las sugerencias.")
+            st.warning("No se pudieron cargar sugerencias; puedes marcar el punto en el mapa.")
             st.caption(str(error))
-
     else:
         st.session_state.sugerencias_direccion = []
+else:
+    st.session_state.sugerencias_direccion = []
 
-# Presentamos una lista para seleccionar una sugerencia.
 sugerencias = st.session_state.sugerencias_direccion
-
 if sugerencias:
-    opciones = ["Selecciona una dirección confirmada"] + [
-        sugerencia["texto"] for sugerencia in sugerencias
-    ]
-
+    opciones = ["Selecciona una dirección"] + [x["texto"] for x in sugerencias]
     seleccion = st.selectbox(
-        "📍 Selecciona la dirección encontrada en Google Maps",
+        "📍 Direcciones encontradas (incluye aproximadas)",
         opciones,
         key="seleccion_direccion"
     )
-
     if seleccion != opciones[0]:
-        sugerencia_seleccionada = next(
-            (
-                sugerencia
-                for sugerencia in sugerencias
-                if sugerencia["texto"] == seleccion
-            ),
-            None
+        sugerencia = next((x for x in sugerencias if x["texto"] == seleccion), None)
+        lugar_actual = st.session_state.direccion_confirmada
+        # No volver a colocar el pin de Google en cada rerun: eso impediría
+        # que el usuario ajustara manualmente el punto sobre el mapa.
+        pin_manual_activo = bool(
+            lugar_actual
+            and lugar_actual.get("origen_coordenadas") == "pin_manual"
+            and lugar_actual.get("texto_busqueda", "") == texto_actual
         )
-
-        if sugerencia_seleccionada:
+        sugerencia_ya_aplicada = bool(
+            lugar_actual
+            and sugerencia
+            and lugar_actual.get("texto_busqueda", "") == texto_actual
+            and (
+                lugar_actual.get("place_id") == sugerencia.get("id")
+                or (
+                    sugerencia.get("tipo") == "geocode"
+                    and lugar_actual.get("latitud") == sugerencia.get("latitud")
+                    and lugar_actual.get("longitud") == sugerencia.get("longitud")
+                )
+            )
+        )
+        if sugerencia and not pin_manual_activo and not sugerencia_ya_aplicada:
             try:
-                # Consultamos las coordenadas solo cuando el usuario
-                # selecciona una dirección de las sugerencias.
-                lugar = obtener_detalles_lugar(
-                    sugerencia_seleccionada["id"]
-                )
-
-                lugar["texto_busqueda"] = direccion_escrita.strip()
+                if sugerencia.get("tipo") == "geocode":
+                    lugar = {
+                        "place_id": None,
+                        "direccion": sugerencia["direccion"],
+                        "latitud": sugerencia["latitud"],
+                        "longitud": sugerencia["longitud"],
+                        "aproximada": True
+                    }
+                else:
+                    lugar = obtener_detalles_lugar(sugerencia["id"])
+                    lugar["aproximada"] = False
+                lugar["texto_busqueda"] = texto_actual
                 st.session_state.direccion_confirmada = lugar
-
-                st.success("Dirección seleccionada correctamente.")
-
-                if (
-                    lugar.get("latitud") is not None
-                    and lugar.get("longitud") is not None
-                ):
-                    st.caption(
-                        f"Coordenadas: {lugar['latitud']}, "
-                        f"{lugar['longitud']}"
-                    )
-
+                st.session_state.ubicacion_mapa = {
+                    "latitud": float(lugar["latitud"]),
+                    "longitud": float(lugar["longitud"])
+                }
+                st.success("Ubicación seleccionada. Si hace falta, ajusta el punto en el mapa.")
             except Exception as error:
-                st.error(
-                    "No se pudieron obtener los detalles de esta "
-                    "dirección. Verifica Places API (New)."
-                )
+                st.warning("No se pudieron obtener los detalles de esa sugerencia. Puedes fijar el punto en el mapa.")
                 st.caption(str(error))
 
-# Permitimos continuar incluso si no se elige una sugerencia.
-# En ese caso, la dirección queda sin coordenadas confirmadas.
+# Mapa interactivo: el usuario puede hacer clic donde realmente está el cliente.
+st.markdown("#### 🗺️ Confirma la ubicación en el mapa")
+st.caption("Haz clic sobre el mapa para colocar o ajustar el pin. Puedes acercar el mapa con la rueda del ratón.")
+ubicacion_actual = st.session_state.ubicacion_mapa
+if ubicacion_actual:
+    centro_lat = float(ubicacion_actual["latitud"])
+    centro_lon = float(ubicacion_actual["longitud"])
+    zoom_mapa = 16
+else:
+    centro_lat, centro_lon, zoom_mapa = 3.4516, -76.5320, 12
+
+mapa = folium.Map(location=[centro_lat, centro_lon], zoom_start=zoom_mapa, control_scale=True)
+if ubicacion_actual:
+    folium.Marker(
+        [centro_lat, centro_lon],
+        tooltip="Ubicación seleccionada",
+        popup="Punto del cliente",
+        icon=folium.Icon(color="purple", icon="map-marker")
+    ).add_to(mapa)
+
+resultado_mapa = st_folium(
+    mapa,
+    width=None,
+    height=360,
+    returned_objects=["last_clicked"],
+    key="mapa_direccion_cliente_" + str(abs(hash(texto_actual)))
+)
+click_mapa = (resultado_mapa or {}).get("last_clicked")
+if click_mapa and click_mapa.get("lat") is not None and click_mapa.get("lng") is not None:
+    nueva_ubicacion = {
+        "latitud": float(click_mapa["lat"]),
+        "longitud": float(click_mapa["lng"])
+    }
+    anterior = st.session_state.ubicacion_mapa
+    if not anterior or abs(float(anterior["latitud"]) - nueva_ubicacion["latitud"]) > 0.00001 or abs(float(anterior["longitud"]) - nueva_ubicacion["longitud"]) > 0.00001:
+        st.session_state.ubicacion_mapa = nueva_ubicacion
+        st.session_state.direccion_confirmada = {
+            "place_id": None,
+            "direccion": texto_actual,
+            "texto_busqueda": texto_actual,
+            "latitud": nueva_ubicacion["latitud"],
+            "longitud": nueva_ubicacion["longitud"],
+            "aproximada": True,
+            "origen_coordenadas": "pin_manual"
+        }
+        st.rerun()
+
+ubicacion_final = st.session_state.ubicacion_mapa
+if ubicacion_final:
+    st.success(
+        f"📌 Punto fijado: {ubicacion_final['latitud']:.6f}, "
+        f"{ubicacion_final['longitud']:.6f}"
+    )
+    st.caption("Estas coordenadas se guardarán con el pedido y se usarán para optimizar la ruta.")
+else:
+    st.info("Selecciona una sugerencia o fija el punto del cliente en el mapa antes de guardar para que el pedido pueda entrar en la optimización.")
 
 with st.form("pedido", clear_on_submit=True):
 
@@ -666,12 +738,13 @@ with st.form("pedido", clear_on_submit=True):
     if guardar:
 
         direccion_confirmada = st.session_state.direccion_confirmada
+        ubicacion_final = st.session_state.ubicacion_mapa
 
-        # Si se confirmó una sugerencia, guardamos su dirección
-        # formateada; si no, guardamos el texto manual.
+        # Si Google confirmó una dirección, guardamos el formato de Google.
+        # Si se fijó el pin manualmente, conservamos el texto digitado.
         direccion_final = (
-            direccion_confirmada["direccion"]
-            if direccion_confirmada
+            direccion_confirmada.get("direccion")
+            if direccion_confirmada and direccion_confirmada.get("direccion")
             else direccion_escrita.strip()
         )
 
@@ -709,12 +782,26 @@ with st.form("pedido", clear_on_submit=True):
                     if direccion_confirmada else None
                 ),
                 "latitud": (
-                    direccion_confirmada.get("latitud")
-                    if direccion_confirmada else None
+                    float(ubicacion_final["latitud"])
+                    if ubicacion_final else (
+                        direccion_confirmada.get("latitud") if direccion_confirmada else None
+                    )
                 ),
                 "longitud": (
-                    direccion_confirmada.get("longitud")
-                    if direccion_confirmada else None
+                    float(ubicacion_final["longitud"])
+                    if ubicacion_final else (
+                        direccion_confirmada.get("longitud") if direccion_confirmada else None
+                    )
+                ),
+                "ubicacion_aproximada": bool(
+                    direccion_confirmada.get("aproximada", False)
+                    if direccion_confirmada else ubicacion_final is not None
+                ),
+                "origen_coordenadas": (
+                    direccion_confirmada.get("origen_coordenadas", "google_places")
+                    if direccion_confirmada else (
+                        "pin_manual" if ubicacion_final else None
+                    )
                 )
             }
 
@@ -740,6 +827,7 @@ with st.form("pedido", clear_on_submit=True):
 
                 st.session_state.direccion_confirmada = None
                 st.session_state.sugerencias_direccion = []
+                st.session_state.ubicacion_mapa = None
                 st.rerun()
 
             except Exception as error:
