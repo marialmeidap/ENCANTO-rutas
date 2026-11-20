@@ -278,6 +278,68 @@ if db is not None and not st.session_state.pedidos_cargados:
 st.title("📦 ENCANTO Rutas")
 st.caption("Gestión de pedidos, entregas y rutas · Encanto Capilar")
 
+# Estilo visual: panel más moderno, colores de marca y tarjetas limpias.
+st.markdown("""
+<style>
+:root { --encanto-ink: #241b2f; --encanto-purple: #6d3fc0; --encanto-pink: #e85d9e; --encanto-teal: #19a7a0; }
+.stApp { background: linear-gradient(180deg, #fff9fc 0%, #f7f5ff 48%, #ffffff 100%); }
+[data-testid="stHeader"] { background: rgba(255,255,255,.75); }
+h1, h2, h3 { color: var(--encanto-ink); }
+h1 { letter-spacing: -0.035em; }
+div[data-testid="stMetric"] { background: linear-gradient(135deg,#ffffff,#f5efff); border: 1px solid #e7daf8; padding: 14px 16px; border-radius: 16px; box-shadow: 0 4px 14px rgba(67,35,99,.06); }
+div[data-testid="stMetricLabel"] { color: #6d5b7c; }
+div[data-testid="stMetricValue"] { color: #522b91; }
+.stButton > button, .stLinkButton > a, div[data-testid="stFormSubmitButton"] button { border-radius: 12px; border: 1px solid #d9c7f5; font-weight: 650; transition: all .15s ease; }
+.stButton > button[kind="primary"], div[data-testid="stFormSubmitButton"] button[kind="primary"] { background: linear-gradient(90deg,#6d3fc0,#a34fba); color: white; border: 0; }
+div[data-testid="stExpander"] { background: rgba(255,255,255,.88); border: 1px solid #e6ddec; border-radius: 14px; overflow: hidden; }
+div[data-testid="stTextInput"] input, div[data-testid="stTextArea"] textarea, div[data-testid="stSelectbox"] div[role="combobox"] { border-radius: 10px; }
+.encanto-banner { padding: 20px 24px; border-radius: 18px; color: white; background: linear-gradient(110deg,#49257d 0%,#8547bd 55%,#e85d9e 100%); margin: 10px 0 22px 0; box-shadow: 0 8px 24px rgba(83,40,127,.16); }
+.encanto-banner p { margin: 5px 0 0 0; color: #f8eefe; }
+</style>
+<div class="encanto-banner"><h2 style="color:white;margin:0">✨ Tu operación, más clara y organizada</h2><p>Pedidos · Recogidas · Rutas · Entregas — Encanto Capilar</p></div>
+""", unsafe_allow_html=True)
+
+# Roles y credenciales: configurar en variables de entorno/Secret Manager de Cloud Run.
+# No guardar contraseñas en el repositorio ni compartirlas por chat.
+ADMIN_USER = os.environ.get("ENCANTO_ADMIN_USER", "")
+ADMIN_PASSWORD = os.environ.get("ENCANTO_ADMIN_PASSWORD", "")
+BODEGA_USER = os.environ.get("ENCANTO_BODEGA_USER", "")
+BODEGA_PASSWORD = os.environ.get("ENCANTO_BODEGA_PASSWORD", "")
+
+if "usuario_encanto" not in st.session_state:
+    st.session_state.usuario_encanto = None
+if "rol_encanto" not in st.session_state:
+    st.session_state.rol_encanto = None
+
+with st.sidebar:
+    st.markdown("## 🔐 Acceso del equipo")
+    if st.session_state.rol_encanto:
+        st.success(f"Sesión: {st.session_state.usuario_encanto} · {st.session_state.rol_encanto}")
+        if st.button("Cerrar sesión", use_container_width=True):
+            st.session_state.usuario_encanto = None
+            st.session_state.rol_encanto = None
+            st.rerun()
+    else:
+        with st.form("login_encanto"):
+            usuario_login = st.text_input("Usuario")
+            password_login = st.text_input("Contraseña", type="password")
+            entrar = st.form_submit_button("Ingresar", type="primary", use_container_width=True)
+        if entrar:
+            if ADMIN_USER and ADMIN_PASSWORD and usuario_login == ADMIN_USER and password_login == ADMIN_PASSWORD:
+                st.session_state.usuario_encanto = usuario_login
+                st.session_state.rol_encanto = "Administradora"
+                st.rerun()
+            elif BODEGA_USER and BODEGA_PASSWORD and usuario_login == BODEGA_USER and password_login == BODEGA_PASSWORD:
+                st.session_state.usuario_encanto = usuario_login
+                st.session_state.rol_encanto = "Bodega"
+                st.rerun()
+            else:
+                st.error("Credenciales incorrectas o no configuradas.")
+    if not all([ADMIN_USER, ADMIN_PASSWORD, BODEGA_USER, BODEGA_PASSWORD]):
+        st.warning("Falta configurar uno o más secretos ENCANTO_* en Cloud Run. Edición y eliminación permanecerán bloqueadas hasta configurarlos.")
+    st.caption("Administradora: edición y eliminación. Bodega: registro de recogidas.")
+
+
 if db is not None:
     st.success("Base de datos Firestore conectada.")
 else:
@@ -298,6 +360,23 @@ else:
 # ============================================================
 # 7. INDICADORES DEL DASHBOARD
 # ============================================================
+
+col_refrescar, col_estado = st.columns([1, 4])
+with col_refrescar:
+    if st.button("🔄 Actualizar pedidos", use_container_width=True):
+        try:
+            if db is not None:
+                st.session_state.pedidos = cargar_pedidos()
+                st.session_state.pedidos_cargados = True
+                st.success("Pedidos sincronizados con Firestore.")
+                st.rerun()
+            else:
+                st.warning("Firestore no está conectado.")
+        except Exception as error:
+            st.error("No se pudieron actualizar los pedidos.")
+            st.caption(str(error))
+with col_estado:
+    st.caption("Los cambios guardados se sincronizan con Firestore. Usa Actualizar pedidos para traer cambios recientes de otros usuarios.")
 
 pedidos = st.session_state.pedidos
 
@@ -671,15 +750,52 @@ with st.form("pedido", clear_on_submit=True):
 
 # ============================================================
 # 9. LISTA DE PEDIDOS REGISTRADOS
-# ============================================================
-
 st.divider()
 st.header("📋 Pedidos registrados")
+st.caption("Busca, filtra por fecha de creación y gestiona cada pedido desde su ficha.")
 
 if not st.session_state.pedidos:
     st.info("Todavía no hay pedidos registrados.")
+else:
+    todos_pedidos = list(st.session_state.pedidos)
+    fechas_validas = [obtener_fecha_pedido(x) for x in todos_pedidos]
+    fechas_validas = [x for x in fechas_validas if x is not None]
+    fecha_min = min(fechas_validas) if fechas_validas else hoy
+    fecha_max = max(fechas_validas) if fechas_validas else hoy
+    c_busqueda, c_estado, c_desde, c_hasta = st.columns([2.2, 1.1, 1.2, 1.2])
+    with c_busqueda:
+        busqueda_pedidos = st.text_input("🔎 Buscar pedido", placeholder="Número, cliente, WhatsApp o dirección", key="buscar_pedidos_registrados")
+    with c_estado:
+        filtro_estado_pedidos = st.selectbox("Estado", ["Todos", "Pendiente", "Asignado", "En camino", "Entregado", "Novedad"], key="estado_filtro_pedidos")
+    with c_desde:
+        fecha_desde_registro = st.date_input("Registrado desde", value=fecha_min, min_value=fecha_min, max_value=fecha_max, format="DD/MM/YYYY", key="fecha_desde_registro")
+    with c_hasta:
+        fecha_hasta_registro = st.date_input("Registrado hasta", value=fecha_max, min_value=fecha_min, max_value=fecha_max, format="DD/MM/YYYY", key="fecha_hasta_registro")
+    if fecha_desde_registro > fecha_hasta_registro:
+        st.warning("La fecha inicial no puede ser posterior a la fecha final.")
+        pedidos_registrados_filtrados = []
+    else:
+        texto_busqueda = busqueda_pedidos.strip().casefold()
+        pedidos_registrados_filtrados = []
+        for pedido_filtro in todos_pedidos:
+            fecha_filtro = obtener_fecha_pedido(pedido_filtro)
+            if fecha_filtro is None or not (fecha_desde_registro <= fecha_filtro <= fecha_hasta_registro):
+                continue
+            if filtro_estado_pedidos != "Todos" and pedido_filtro.get("estado", "Pendiente") != filtro_estado_pedidos:
+                continue
+            campos_busqueda = " ".join(str(pedido_filtro.get(campo, "")) for campo in ("numero", "nombre", "telefono", "direccion", "barrio", "ciudad")).casefold()
+            if texto_busqueda and texto_busqueda not in campos_busqueda:
+                continue
+            pedidos_registrados_filtrados.append(pedido_filtro)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Coincidencias", len(pedidos_registrados_filtrados))
+    m2.metric("Recogidos", sum(bool(x.get("recogido")) for x in pedidos_registrados_filtrados))
+    m3.metric("Pendientes de recogida", sum(not bool(x.get("recogido")) for x in pedidos_registrados_filtrados))
+    if not pedidos_registrados_filtrados:
+        st.info("No hay pedidos que coincidan con los filtros seleccionados.")
 
-for i, p in enumerate(st.session_state.pedidos):
+for p in pedidos_registrados_filtrados:
+    i = next((idx for idx, original in enumerate(st.session_state.pedidos) if original.get("numero") == p.get("numero")), 0)
 
     with st.expander(
         f"{p.get('numero', 'Sin número')} · {p.get('nombre', 'Sin nombre')} · {p.get('estado', 'Pendiente')}"
@@ -782,19 +898,99 @@ for i, p in enumerate(st.session_state.pedidos):
         if estado != p.get("estado", "Pendiente"):
 
             try:
-                # Si Firestore está disponible, persistimos el cambio.
-                if db is not None:
-                    actualizar_pedido(
-                        p["numero"],
-                        {"estado": estado}
-                    )
-
+                if db is None:
+                    raise RuntimeError("Firestore no está conectado; el cambio no se guardó.")
+                actualizar_pedido(
+                    p["numero"],
+                    {"estado": estado, "estado_actualizado_en": datetime.now(ZoneInfo("America/Bogota")).isoformat()}
+                )
                 st.session_state.pedidos[i]["estado"] = estado
+                st.session_state.pedidos[i]["estado_actualizado_en"] = datetime.now(ZoneInfo("America/Bogota")).isoformat()
                 st.rerun()
 
             except Exception as error:
                 st.error("No se pudo actualizar el estado en Firestore.")
                 st.caption(str(error))
+
+        st.markdown("##### 📦 Control de recogida en bodega")
+        recogido = bool(p.get("recogido", False))
+        st.caption(
+            "Recogido: " + ("Sí" if recogido else "No") +
+            (f" · {p.get('recogido_en', '')}" if p.get("recogido_en") else "")
+        )
+        if st.session_state.rol_encanto in ("Administradora", "Bodega"):
+            texto_boton = "↩️ Deshacer recogida" if recogido else "✅ Marcar paquete recogido"
+            if st.button(texto_boton, key="recogida_" + p["numero"], use_container_width=True):
+                try:
+                    if db is None:
+                        raise RuntimeError("Firestore no está conectado; la recogida no se guardó.")
+                    ahora_recogida = datetime.now(ZoneInfo("America/Bogota")).isoformat()
+                    cambios_recogida = {
+                        "recogido": not recogido,
+                        "recogido_en": ahora_recogida if not recogido else None,
+                        "recogido_por": st.session_state.usuario_encanto if not recogido else None
+                    }
+                    actualizar_pedido(p["numero"], cambios_recogida)
+                    st.session_state.pedidos[i].update(cambios_recogida)
+                    st.rerun()
+                except Exception as error:
+                    st.error("No se pudo guardar el control de recogida.")
+                    st.caption(str(error))
+        else:
+            st.caption("Inicia sesión como Bodega o Administradora para registrar la recogida.")
+
+        # Edición y eliminación solo para la administradora.
+        if st.session_state.rol_encanto == "Administradora":
+            with st.expander("✏️ Editar datos del pedido"):
+                with st.form("editar_pedido_" + p["numero"]):
+                    ed_nombre = st.text_input("Nombre", value=p.get("nombre", ""))
+                    ed_telefono = st.text_input("WhatsApp", value=p.get("telefono", ""))
+                    ed_direccion = st.text_input("Dirección", value=p.get("direccion", ""))
+                    ed_barrio = st.text_input("Barrio", value=p.get("barrio", ""))
+                    ed_ciudad = st.text_input("Ciudad", value=p.get("ciudad", "Cali"))
+                    ed_referencia = st.text_input("Referencia", value=p.get("referencia", ""))
+                    ed_producto = st.text_input("Producto", value=p.get("producto", ""))
+                    ed_valor = st.number_input("Valor a cobrar (COP)", min_value=0, step=1000, value=max(0, int(p.get("valor", 0) or 0)))
+                    ed_observaciones = st.text_area("Observaciones", value=p.get("observaciones", ""))
+                    guardar_edicion = st.form_submit_button("💾 Guardar cambios", type="primary")
+                if guardar_edicion:
+                    if not ed_nombre.strip() or not ed_telefono.strip() or not ed_direccion.strip():
+                        st.error("Nombre, WhatsApp y dirección son obligatorios.")
+                    else:
+                        cambios_edicion = {
+                            "nombre": ed_nombre.strip(), "telefono": ed_telefono.strip(),
+                            "direccion": ed_direccion.strip(), "barrio": ed_barrio.strip(),
+                            "ciudad": ed_ciudad.strip(), "referencia": ed_referencia.strip(),
+                            "producto": ed_producto.strip(), "valor": int(ed_valor),
+                            "observaciones": ed_observaciones.strip(),
+                            "editado_en": datetime.now(ZoneInfo("America/Bogota")).isoformat(),
+                            "editado_por": st.session_state.usuario_encanto
+                        }
+                        try:
+                            if db is None:
+                                raise RuntimeError("Firestore no está conectado; la edición no se guardó.")
+                            actualizar_pedido(p["numero"], cambios_edicion)
+                            st.session_state.pedidos[i].update(cambios_edicion)
+                            st.success("Pedido actualizado.")
+                            st.rerun()
+                        except Exception as error:
+                            st.error("No se pudo guardar la edición.")
+                            st.caption(str(error))
+            with st.expander("🗑️ Eliminar pedido"):
+                st.warning("Esta acción elimina el pedido de Firestore y no se puede deshacer.")
+                confirmar_eliminar = st.checkbox("Confirmo que deseo eliminar este pedido", key="confirmar_eliminar_" + p["numero"])
+                if st.button("Eliminar definitivamente", key="eliminar_" + p["numero"], disabled=not confirmar_eliminar):
+                    try:
+                        if db is None:
+                            raise RuntimeError("Firestore no está conectado; el pedido no se eliminó.")
+                        db.collection("pedidos").document(p["numero"]).delete()
+                        st.session_state.pedidos = [x for x in st.session_state.pedidos if x.get("numero") != p["numero"]]
+                        st.session_state.destinos_ruta = [x for x in st.session_state.destinos_ruta if x != p["numero"]]
+                        st.success("Pedido eliminado.")
+                        st.rerun()
+                    except Exception as error:
+                        st.error("No se pudo eliminar el pedido.")
+                        st.caption(str(error))
 
         # ========================================================
         # 11. SELECCIONAR DESTINOS PARA UNA RUTA
@@ -1337,6 +1533,8 @@ else:
                                     "estado": "Asignado"
                                 })
                             batch.commit()
+                            st.session_state.pedidos = cargar_pedidos()
+                            st.session_state.pedidos_cargados = True
                             st.session_state.pop("ruta_propuesta", None)
                             st.session_state.destinos_ruta = []
                             st.success(f"Ruta {ruta_id} asignada a {mensajero['nombre']}.")
