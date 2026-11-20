@@ -1,0 +1,318 @@
+import os
+import html
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from urllib.parse import quote
+
+import streamlit as st
+from google.cloud import firestore
+from streamlit_geolocation import streamlit_geolocation
+
+# ENCANTO Mensajero - primera versión móvil
+st.set_page_config(page_title="ENCANTO Mensajero", page_icon="🛵", layout="centered")
+
+DATABASE_ID = "encanto-rutas-db"
+TZ = ZoneInfo("America/Bogota")
+GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+
+st.markdown("""
+<style>
+.stApp {background:linear-gradient(180deg,#fff8fc 0%,#f6f1ff 58%,#ffffff 100%);}
+.block-container {max-width:760px;padding-top:1.3rem;padding-bottom:2.5rem;}
+.encanto-hero {padding:22px;border-radius:20px;color:#fff;background:linear-gradient(115deg,#4a247b,#8750c2 60%,#e65a9c);margin-bottom:18px;}
+.encanto-hero h1 {color:#fff;font-size:1.8rem;margin:0;}
+.encanto-hero p {color:#f9edff;margin:6px 0 0;}
+div[data-testid="stMetric"] {background:#fff;border:1px solid #eadcf7;padding:12px;border-radius:15px;}
+.stButton button,.stLinkButton a {border-radius:12px;font-weight:650;}
+.order-card {padding:14px;border:1px solid #eadcf7;background:#fff;border-radius:15px;margin:8px 0;}
+.pill {display:inline-block;padding:4px 9px;border-radius:999px;background:#f0e7ff;color:#522d86;font-size:.8rem;font-weight:700;}
+</style>
+<div class="encanto-hero"><h1>🛵 ENCANTO Mensajero</h1><p>Tus rutas, tus entregas y tus novedades en un solo lugar.</p></div>
+""", unsafe_allow_html=True)
+
+@st.cache_resource
+def get_db():
+    return firestore.Client(database=DATABASE_ID)
+
+def now_iso():
+    return datetime.now(TZ).isoformat(timespec="seconds")
+
+def fmt_cop(value):
+    try:
+        return f"$ {int(value or 0):,}".replace(",", ".") + " COP"
+    except (TypeError, ValueError):
+        return "$ 0 COP"
+
+def maps_url(order):
+    lat = order.get("latitud") or order.get("latitude")
+    lng = order.get("longitud") or order.get("longitude")
+    if lat is not None and lng is not None:
+        return f"https://www.google.com/maps/dir/?api=1&destination={lat},{lng}"
+    address = ", ".join(str(order.get(k, "")).strip() for k in ("direccion", "barrio", "ciudad") if order.get(k))
+    return "https://www.google.com/maps/dir/?api=1&destination=" + quote(address)
+
+def get_messenger_by_phone(db, messenger_id, phone):
+    doc = db.collection("mensajeros").document(messenger_id).get()
+    if not doc.exists:
+        return None
+    data = doc.to_dict() or {}
+    if not data.get("activo", True):
+        return None
+    stored_phone = "".join(c for c in str(data.get("telefono", "")) if c.isdigit())
+    supplied_phone = "".join(c for c in str(phone) if c.isdigit())
+    if not stored_phone or stored_phone != supplied_phone:
+        return None
+    data["id"] = data.get("id", doc.id)
+    return data
+
+def load_routes(db, messenger_id):
+    routes = []
+    for doc in db.collection("rutas").stream():
+        r = doc.to_dict() or {}
+        r.setdefault("id", doc.id)
+        if r.get("mensajero_id") == messenger_id and r.get("estado") in ("Asignada", "En camino"):
+            routes.append(r)
+    routes.sort(key=lambda r: r.get("creada_en", ""))
+    return routes
+
+def load_orders(db, route):
+    found = []
+    for number in route.get("pedido_numeros", []):
+        doc = db.collection("pedidos").document(str(number)).get()
+        if doc.exists:
+            order = doc.to_dict() or {}
+            order.setdefault("numero", str(number))
+            order["documento_id"] = doc.id
+            found.append(order)
+    # Preserve optimized order from pedido_numeros.
+    return found
+
+def update_order_and_route(db, order_number, changes):
+    db.collection("pedidos").document(str(order_number)).update(changes)
+
+def safe_text(value, fallback="No registrado"):
+    value = str(value or "").strip()
+    return html.escape(value if value else fallback)
+
+db = None
+db_error = None
+try:
+    db = get_db()
+except Exception as exc:
+    db_error = str(exc)
+
+if db is None:
+    st.error("No se pudo conectar con Firestore. Verifica la cuenta de servicio y los permisos del servicio Cloud Run.")
+    if db_error:
+        st.caption(db_error)
+    st.stop()
+
+if "courier_session" not in st.session_state:
+    st.session_state.courier_session = None
+
+with st.sidebar:
+    st.markdown("### 🔐 Sesión del mensajero")
+    if st.session_state.courier_session:
+        st.success(st.session_state.courier_session.get("nombre", "Mensajero"))
+        if st.button("Cerrar sesión", use_container_width=True):
+            st.session_state.courier_session = None
+            st.rerun()
+    else:
+        st.caption("Usa el ID de mensajero y el teléfono registrados por administración.")
+
+if not st.session_state.courier_session:
+    st.subheader("Ingresar")
+    st.info("El ID y el teléfono deben coincidir con el registro de mensajeros de ENCANTO Rutas.")
+    with st.form("courier_login"):
+        messenger_id = st.text_input("ID de mensajero", placeholder="Ej.: A1B2C3D4E5F6")
+        phone = st.text_input("Teléfono registrado", placeholder="Número registrado en el panel")
+        submit = st.form_submit_button("Entrar a mi ruta", type="primary", use_container_width=True)
+    if submit:
+        try:
+            messenger = get_messenger_by_phone(db, messenger_id.strip().upper(), phone)
+            if messenger:
+                st.session_state.courier_session = {
+                    "id": messenger["id"],
+                    "nombre": messenger.get("nombre", "Mensajero"),
+                    "telefono": messenger.get("telefono", "")
+                }
+                st.rerun()
+            else:
+                st.error("No pudimos validar los datos. Revisa el ID y el teléfono con administración.")
+        except Exception as exc:
+            st.error("No fue posible validar el acceso.")
+            st.caption(str(exc))
+    with st.expander("¿Dónde encuentro mi ID?"):
+        st.write("Administración debe compartirte el ID del mensajero registrado en ENCANTO Rutas. Si no lo tienes, solicítalo.")
+    st.caption("Versión piloto: este acceso valida ID + teléfono. Antes de uso público, se recomienda cambiarlo por PIN individual con hash o Firebase Authentication.")
+    st.stop()
+
+courier = st.session_state.courier_session
+st.markdown(f"### Hola, {safe_text(courier['nombre'])} 👋")
+st.caption(f"Última actualización: {datetime.now(TZ).strftime('%d/%m/%Y · %I:%M %p')}")
+
+if st.button("🔄 Actualizar mis rutas", use_container_width=True):
+    st.rerun()
+
+st.markdown("### 📍 Mi ubicación GPS")
+st.caption("La ubicación se consulta desde el navegador mientras esta pantalla está abierta. Permite el acceso a la ubicación cuando el celular lo solicite.")
+gps = streamlit_geolocation()
+if isinstance(gps, dict) and gps.get("latitude") is not None and gps.get("longitude") is not None:
+    try:
+        gps_lat = float(gps["latitude"])
+        gps_lng = float(gps["longitude"])
+        gps_accuracy = gps.get("accuracy")
+        gps_record = {
+            "mensajero_id": courier["id"],
+            "mensajero_nombre": courier["nombre"],
+            "latitud": gps_lat,
+            "longitud": gps_lng,
+            "precision_metros": float(gps_accuracy) if gps_accuracy is not None else None,
+            "actualizado_en": now_iso(),
+            "fuente": "navegador"
+        }
+        db.collection("ubicaciones_mensajeros").document(courier["id"]).set(gps_record, merge=True)
+        st.success(f"Ubicación actualizada · {gps_lat:.5f}, {gps_lng:.5f}")
+        st.caption("La ubicación más reciente queda guardada en Firestore para que pueda consultarse desde el panel administrativo.")
+    except Exception as exc:
+        st.warning("No se pudo guardar la ubicación GPS.")
+        st.caption(str(exc))
+else:
+    st.info("Activa el permiso de ubicación del navegador para registrar tu posición. Si no aparece la solicitud, revisa los permisos del sitio en el navegador.")
+
+try:
+    routes = load_routes(db, courier["id"])
+except Exception as exc:
+    st.error("No se pudieron cargar tus rutas.")
+    st.caption(str(exc))
+    st.stop()
+
+if not routes:
+    st.success("No tienes rutas pendientes asignadas.")
+    st.info("Cuando administración te asigne una ruta, aparecerá aquí.")
+    st.stop()
+
+for route in routes:
+    route_id = route["id"]
+    orders = load_orders(db, route)
+    total = len(orders)
+    delivered = sum(o.get("estado") == "Entregado" for o in orders)
+    incidents = sum(o.get("estado") == "Novedad" for o in orders)
+    st.markdown("---")
+    st.markdown(f"## 🧭 Ruta {safe_text(route_id)}")
+    status = route.get("estado", "Asignada")
+    st.markdown(f'<span class="pill">{safe_text(status)}</span>', unsafe_allow_html=True)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Pedidos", total)
+    m2.metric("Entregados", delivered)
+    m3.metric("Novedades", incidents)
+    if route.get("distancia_metros"):
+        st.caption(f"Distancia estimada: {route['distancia_metros']/1000:.1f} km · Duración estimada: {int(route.get('duracion_segundos',0)/60)} min")
+    if route.get("url_google_maps"):
+        st.link_button("🗺️ Abrir ruta en Google Maps", route["url_google_maps"], use_container_width=True)
+
+    if status == "Asignada":
+        st.warning("Confirma que recibiste los paquetes antes de salir.")
+        if st.button("📦 Confirmar recogida y comenzar ruta", key=f"start_{route_id}", type="primary", use_container_width=True):
+            try:
+                batch = db.batch()
+                batch.update(db.collection("rutas").document(route_id), {
+                    "estado": "En camino",
+                    "recogida_confirmada_en": now_iso(),
+                    "despachada_en": now_iso(),
+                    "recogida_confirmada_por": courier["id"]
+                })
+                for order in orders:
+                    if order.get("estado") not in ("Entregado", "Novedad"):
+                        batch.update(db.collection("pedidos").document(str(order["numero"])), {
+                            "estado": "En camino",
+                            "recogido": True,
+                            "recogido_en": now_iso(),
+                            "recogido_por": courier["nombre"],
+                            "estado_actualizado_en": now_iso()
+                        })
+                batch.commit()
+                st.success("Recogida registrada. ¡Buen recorrido!")
+                st.rerun()
+            except Exception as exc:
+                st.error("No se pudo registrar la salida.")
+                st.caption(str(exc))
+
+    for idx, order in enumerate(orders, start=1):
+        number = str(order.get("numero", ""))
+        state = order.get("estado", "Pendiente")
+        with st.container(border=True):
+            st.markdown(f"### {idx}. Pedido {safe_text(number)}")
+            st.markdown(f"**{safe_text(order.get('nombre'))}** · {safe_text(state)}")
+            st.write("📍", ", ".join(str(order.get(k, "")).strip() for k in ("direccion", "barrio", "ciudad") if order.get(k)) or "Dirección no registrada")
+            if order.get("referencia"):
+                st.caption("Referencia: " + safe_text(order.get("referencia")))
+            if order.get("telefono"):
+                phone_clean = "".join(c for c in str(order.get("telefono")) if c.isdigit())
+                st.link_button("📲 Contactar por WhatsApp", f"https://wa.me/{phone_clean}", use_container_width=True)
+            st.write("💵 Cobrar: **" + fmt_cop(order.get("valor")) + "**")
+            st.link_button("➡️ Navegar a este cliente", maps_url(order), use_container_width=True)
+
+            if state == "Entregado":
+                st.success("Entrega completada")
+            else:
+                with st.form(f"delivery_{route_id}_{number}"):
+                    new_state = st.selectbox(
+                        "Resultado de la visita",
+                        ["Entregado", "Novedad"],
+                        index=0 if state != "Novedad" else 1,
+                        key=f"state_{route_id}_{number}"
+                    )
+                    incident_type = st.selectbox(
+                        "Motivo de novedad",
+                        ["Cliente ausente", "No responde", "Dirección incorrecta", "Reprogramar", "Otro"],
+                        key=f"incident_{route_id}_{number}"
+                    )
+                    incident_note = st.text_area("Detalle / observaciones", key=f"note_{route_id}_{number}", placeholder="Describe qué pasó...")
+                    proof_photo = st.file_uploader("Foto de evidencia (opcional)", type=["jpg", "jpeg", "png"], key=f"photo_{route_id}_{number}")
+                    save_delivery = st.form_submit_button("Guardar resultado", type="primary", use_container_width=True)
+                if save_delivery:
+                    try:
+                        changes = {
+                            "estado": new_state,
+                            "estado_actualizado_en": now_iso(),
+                            "actualizado_por_mensajero_id": courier["id"],
+                            "actualizado_por_mensajero_nombre": courier["nombre"]
+                        }
+                        if new_state == "Novedad":
+                            changes.update({
+                                "novedad_tipo": incident_type,
+                                "novedad_detalle": incident_note.strip()
+                            })
+                        else:
+                            changes.update({
+                                "entregado_en": now_iso(),
+                                "novedad_tipo": None,
+                                "novedad_detalle": None
+                            })
+                        if proof_photo is not None:
+                            st.warning("La foto se seleccionó, pero la subida persistente de evidencia requiere configurar Cloud Storage. No se guardará el archivo en Firestore.")
+                        update_order_and_route(db, number, changes)
+                        st.success(f"Pedido {number}: {new_state.lower()} registrado.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error("No se pudo guardar el resultado de la entrega.")
+                        st.caption(str(exc))
+
+    if status == "En camino" and delivered + incidents == total:
+        st.success("Todos los pedidos tienen resultado registrado. Puedes finalizar la ruta.")
+        if st.button("🏁 Finalizar ruta", key=f"finish_{route_id}", use_container_width=True):
+            try:
+                db.collection("rutas").document(route_id).update({
+                    "estado": "Finalizada",
+                    "finalizada_en": now_iso(),
+                    "finalizada_por": courier["id"]
+                })
+                st.success("Ruta finalizada.")
+                st.rerun()
+            except Exception as exc:
+                st.error("No se pudo finalizar la ruta.")
+                st.caption(str(exc))
+
+st.divider()
+st.caption("ENCANTO Mensajero · La ubicación GPS solo se registra mientras la app está abierta y con permiso del dispositivo.")
