@@ -1,4 +1,3 @@
-
 # ============================================================
 # ENCANTO RUTAS
 # Sistema de pedidos, direcciones, rutas y etiquetas de envío
@@ -33,8 +32,8 @@ st.set_page_config(
 DATABASE_ID = "encanto-rutas-db"
 
 # Ubicación fija de la bodega de ENCANTO.
-BODEGA_LATITUD = 3.451434246550579
-BODEGA_LONGITUD = -76.53475560410878
+BODEGA_LATITUD = 3.4522
+BODEGA_LONGITUD = -76.5339
 
 
 # La clave se obtiene del secreto configurado en Cloud Run.
@@ -70,7 +69,6 @@ try:
     db = conectar_firestore()
 except Exception as error:
     error_firestore = str(error)
-
 
 # ============================================================
 # 3. FUNCIONES AUXILIARES PARA FIRESTORE
@@ -124,7 +122,6 @@ def actualizar_pedido(numero, cambios):
 
     db.collection("pedidos").document(numero).update(cambios)
     return True
-
 
 # ============================================================
 # 4. FUNCIONES PARA GOOGLE PLACES
@@ -217,9 +214,6 @@ def buscar_direcciones(texto):
     return sugerencias
 
 
-
-
-
 def obtener_detalles_lugar(place_id):
     """
     Consulta la dirección confirmada y sus coordenadas.
@@ -301,12 +295,6 @@ else:
         "Falta GOOGLE_MAPS_API_KEY en las variables de Cloud Run."
     )
 
-
-# ============================================================
-# 7. INDICADORES DEL DASHBOARD
-# ============================================================
-
-
 # ============================================================
 # 7. INDICADORES DEL DASHBOARD
 # ============================================================
@@ -377,7 +365,6 @@ def obtener_fecha_pedido(pedido):
             pass
 
     return None
-
 
 # Filtrar pedidos por el periodo seleccionado.
 pedidos_periodo = []
@@ -469,8 +456,6 @@ else:
     st.info("No hay pedidos registrados en el periodo seleccionado.")
 
 st.divider()
-
-
 
 # ============================================================
 # 8. FORMULARIO PARA REGISTRAR UN PEDIDO
@@ -684,7 +669,6 @@ with st.form("pedido", clear_on_submit=True):
                 )
                 st.caption(str(error))
 
-
 # ============================================================
 # 9. LISTA DE PEDIDOS REGISTRADOS
 # ============================================================
@@ -777,6 +761,7 @@ for i, p in enumerate(st.session_state.pedidos):
 
         opciones_estado = [
             "Pendiente",
+            "Asignado",
             "En camino",
             "Entregado",
             "Novedad"
@@ -837,8 +822,6 @@ for i, p in enumerate(st.session_state.pedidos):
         ):
             st.session_state.etiqueta = p["numero"]
 
-
-
 # ============================================================
 # 13. CONSTRUIR Y OPTIMIZAR RUTA CON GOOGLE ROUTES API
 # ============================================================
@@ -898,7 +881,7 @@ def consultar_ruta_google(origen, destino, intermedios):
             for punto in intermedios
         ]
 
-    # Google puede reorganizar los puntos intermedios.
+# Google puede reorganizar los puntos intermedios.
     if len(intermedios) >= 2:
         datos["optimizeWaypointOrder"] = True
 
@@ -972,7 +955,6 @@ if st.session_state.destinos_ruta:
         "🚚 Optimizar ruta desde la bodega",
         type="primary"
     ):
-
         # Solo optimizamos pedidos con coordenadas confirmadas.
         pedidos_validos = []
         pedidos_sin_coordenadas = []
@@ -1124,7 +1106,6 @@ if st.session_state.destinos_ruta:
                     "Distancia estimada",
                     f"{kilometros:.1f} km"
                 )
-
                 # Construimos Google Maps con el orden calculado.
                 destino_final = puntos[mejor_orden[-1]]
 
@@ -1163,6 +1144,20 @@ if st.session_state.destinos_ruta:
                     "en el último cliente. No incluye regreso "
                     "automático a la bodega."
                 )
+                 # Guardar temporalmente la propuesta para asignarla
+                # desde el módulo de despacho.
+                st.session_state["ruta_propuesta"] = {
+                    "id": uuid.uuid4().hex[:12].upper(),
+                    "pedido_numeros": [
+                        pedido["numero"] for pedido in pedidos_ordenados
+                    ],
+                    "duracion_segundos": mejor_resultado["duracion_segundos"],
+                    "distancia_metros": mejor_resultado["distancia_metros"],
+                    "url": url_ruta,
+                    "creada_en": datetime.now(
+                        ZoneInfo("America/Bogota")
+                    ).isoformat()
+                }
 
             except urllib.error.HTTPError as error:
                 detalle = error.read().decode(
@@ -1191,9 +1186,205 @@ else:
         "Selecciona al menos un pedido para preparar una ruta."
     )
 
+# ============================================================
+# 14. DESPACHO Y GESTIÓN DE MENSAJEROS
+# ============================================================
+
+st.divider()
+st.header("🚚 Despacho y mensajeros")
+st.caption(
+    "Registra mensajeros, revisa las rutas optimizadas y asigna "
+    "cada recorrido antes de que salga de la bodega."
+)
+
+if db is None:
+    st.warning(
+        "Firestore no está disponible. No se pueden guardar "
+        "mensajeros ni asignaciones de forma permanente."
+    )
+else:
+    with st.expander("➕ Registrar mensajero", expanded=False):
+        with st.form("form_nuevo_mensajero", clear_on_submit=True):
+            nombre_mensajero = st.text_input("Nombre del mensajero *")
+            telefono_mensajero = st.text_input("Teléfono / WhatsApp *")
+            guardar_mensajero = st.form_submit_button(
+                "Guardar mensajero", type="primary"
+            )
+
+        if guardar_mensajero:
+            if not nombre_mensajero.strip() or not telefono_mensajero.strip():
+                st.error("Completa el nombre y el teléfono del mensajero.")
+            else:
+                try:
+                    mensajero_id = uuid.uuid4().hex[:12].upper()
+                    db.collection("mensajeros").document(mensajero_id).set({
+                        "id": mensajero_id,
+                        "nombre": nombre_mensajero.strip(),
+                        "telefono": telefono_mensajero.strip(),
+                        "activo": True,
+                        "creado_en": datetime.now(
+                            ZoneInfo("America/Bogota")
+                        ).isoformat()
+                    })
+                    st.success("Mensajero registrado correctamente.")
+                    st.rerun()
+                except Exception as error:
+                    st.error("No se pudo registrar el mensajero.")
+                    st.caption(str(error))
+
+    try:
+        mensajeros_registrados = []
+        for doc in db.collection("mensajeros").stream():
+            m = doc.to_dict() or {}
+            m.setdefault("id", doc.id)
+            m.setdefault("nombre", "Sin nombre")
+            m.setdefault("telefono", "")
+            m.setdefault("activo", True)
+            mensajeros_registrados.append(m)
+
+        st.subheader("👥 Mensajeros registrados")
+        if not mensajeros_registrados:
+            st.info("Registra el primer mensajero para poder asignar rutas.")
+        else:
+            for m in mensajeros_registrados:
+                col_nombre, col_tel, col_estado = st.columns([3, 2, 1.5])
+                col_nombre.write(f"**{m['nombre']}**")
+                col_tel.write(m.get("telefono", ""))
+                estado_m = col_estado.selectbox(
+                    "Estado", ["Activo", "Inactivo"],
+                    index=0 if m.get("activo", True) else 1,
+                    key="estado_mensajero_" + m["id"],
+                    label_visibility="collapsed"
+                )
+                activo_nuevo = estado_m == "Activo"
+                if activo_nuevo != m.get("activo", True):
+                    db.collection("mensajeros").document(m["id"]).update(
+                        {"activo": activo_nuevo}
+                    )
+                    st.rerun()
+
+        activos = [m for m in mensajeros_registrados if m.get("activo", True)]
+        st.subheader("📋 Asignar propuesta optimizada")
+        propuesta = st.session_state.get("ruta_propuesta")
+
+        if propuesta:
+            st.write(
+                f"**{len(propuesta['pedido_numeros'])} pedidos** · "
+                f"Propuesta {propuesta['id']}"
+            )
+            st.caption("Revisa la ruta y selecciona el mensajero responsable.")
+            if not activos:
+                st.warning("Primero registra al menos un mensajero activo.")
+            else:
+                opciones = {
+                    f"{m['nombre']} · {m.get('telefono', '')}": m
+                    for m in activos
+                }
+                with st.form("form_asignar_ruta"):
+                    etiqueta = st.selectbox("Asignar a", list(opciones.keys()))
+                    confirmar = st.form_submit_button(
+                        "✅ Guardar y asignar ruta", type="primary"
+                    )
+
+                if confirmar:
+                    mensajero = opciones[etiqueta]
+                    numeros = propuesta["pedido_numeros"]
+                    try:
+                        # Comprobación previa para evitar doble asignación.
+                        rutas_existentes = [
+                            d.to_dict() or {} for d in db.collection("rutas").stream()
+                        ]
+                        ocupados = set()
+                        for r in rutas_existentes:
+                            if r.get("estado") in ("Asignada", "En camino"):
+                                ocupados.update(r.get("pedido_numeros", []))
+                        duplicados = [n for n in numeros if n in ocupados]
+
+                        if duplicados:
+                            st.error(
+                                "No se asignó: estos pedidos ya están en una "
+                                "ruta activa: " + ", ".join(duplicados)
+                            )
+                        else:
+                            ruta_id = propuesta["id"]
+                            ahora = datetime.now(
+                                ZoneInfo("America/Bogota")
+                            ).isoformat()
+                            batch = db.batch()
+                            batch.set(db.collection("rutas").document(ruta_id), {
+                                "id": ruta_id,
+                                "estado": "Asignada",
+                                "mensajero_id": mensajero["id"],
+                                "mensajero_nombre": mensajero["nombre"],
+                                "mensajero_telefono": mensajero["telefono"],
+                                "pedido_numeros": numeros,
+                                "origen": {
+                                    "latitud": BODEGA_LATITUD,
+                                    "longitud": BODEGA_LONGITUD
+                                },
+                                "duracion_segundos": propuesta["duracion_segundos"],
+                                "distancia_metros": propuesta["distancia_metros"],
+                                "url_google_maps": propuesta["url"],
+                                "creada_en": ahora,
+                                "despachada_en": None,
+                                "finalizada_en": None
+                            })
+                            for numero in numeros:
+                                batch.update(db.collection("pedidos").document(numero), {
+                                    "ruta_id": ruta_id,
+                                    "mensajero_id": mensajero["id"],
+                                    "mensajero_nombre": mensajero["nombre"],
+                                    "estado": "Asignado"
+                                })
+                            batch.commit()
+                            st.session_state.pop("ruta_propuesta", None)
+                            st.session_state.destinos_ruta = []
+                            st.success(f"Ruta {ruta_id} asignada a {mensajero['nombre']}.")
+                            st.rerun()
+                    except Exception as error:
+                        st.error("No se pudo guardar la asignación en Firestore.")
+                        st.caption(str(error))
+        else:
+            st.info("Optimiza una ruta en la sección anterior para crear una propuesta de despacho.")
+
+        st.subheader("🛣️ Rutas guardadas")
+        rutas_guardadas = [d.to_dict() or {} for d in db.collection("rutas").stream()]
+        rutas_guardadas.sort(key=lambda r: r.get("creada_en", ""), reverse=True)
+        if not rutas_guardadas:
+            st.info("Todavía no hay rutas guardadas.")
+        for ruta in rutas_guardadas:
+            with st.expander(
+                f"Ruta {ruta.get('id', '')} · {ruta.get('mensajero_nombre', 'Sin asignar')} · {ruta.get('estado', 'Sin estado')}"
+            ):
+                st.write("**Pedidos:** " + ", ".join(ruta.get("pedido_numeros", [])))
+                st.write(f"**Distancia estimada:** {ruta.get('distancia_metros', 0) / 1000:.1f} km")
+                st.write(f"**Tiempo estimado:** {round(ruta.get('duracion_segundos', 0) / 60)} min")
+                if ruta.get("url_google_maps"):
+                    st.link_button(
+                        "📍 Abrir ruta en Google Maps", ruta["url_google_maps"],
+                        key="abrir_ruta_" + ruta.get("id", uuid.uuid4().hex),
+                        use_container_width=True
+                    )
+                if ruta.get("estado") == "Asignada":
+                    if st.button("🚚 Confirmar salida", key="salida_" + ruta.get("id", "")):
+                        db.collection("rutas").document(ruta["id"]).update({
+                            "estado": "En camino",
+                            "despachada_en": datetime.now(ZoneInfo("America/Bogota")).isoformat()
+                        })
+                        st.rerun()
+                if ruta.get("estado") in ("Asignada", "En camino"):
+                    if st.button("Finalizar ruta", key="finalizar_" + ruta.get("id", "")):
+                        db.collection("rutas").document(ruta["id"]).update({
+                            "estado": "Finalizada",
+                            "finalizada_en": datetime.now(ZoneInfo("America/Bogota")).isoformat()
+                        })
+                        st.rerun()
+    except Exception as error:
+        st.error("No se pudo cargar el módulo de despacho.")
+        st.caption(str(error))
 
 # ============================================================
-# 14. GENERAR ETIQUETA TÉRMICA
+# 15. GENERAR ETIQUETA TÉRMICA
 # ============================================================
 
 if st.session_state.get("etiqueta"):
@@ -1239,7 +1430,6 @@ if st.session_state.get("etiqueta"):
                 {esc(p.get('barrio', ''))},
                 {esc(p.get('ciudad', ''))}
             </p>
-
             <p><b>REFERENCIA:</b> {esc(p.get('referencia', ''))}</p>
 
             <hr>
@@ -1352,9 +1542,3 @@ if st.session_state.get("etiqueta"):
 
 
 # ============================================================
-# 15. PIE DE PÁGINA
-# ============================================================
-
-st.caption(
-    "ENCANTO Rutas · Pedidos, direcciones y preparación de rutas."
-)
