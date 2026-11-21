@@ -195,21 +195,36 @@ if not routes:
 for route in routes:
     route_id = route["id"]
     orders = load_orders(db, route)
+    status = route.get("estado", "Asignada")
+
+    # Mantener solo pedidos todavía activos y asignados a este mensajero.
+    # El orden sigue siendo el definido por route["pedido_numeros"].
+    active_orders = []
+    for order in orders:
+        order_state = order.get("estado", "Pendiente")
+        assigned_to = order.get("mensajero_id")
+        if assigned_to not in (None, "") and str(assigned_to) != str(courier["id"]):
+            continue
+        if order_state not in ("Entregado", "Novedad", "Cancelado", "Cancelada"):
+            active_orders.append(order)
+
     total = len(orders)
     delivered = sum(o.get("estado") == "Entregado" for o in orders)
     incidents = sum(o.get("estado") == "Novedad" for o in orders)
+    cancelled = sum(o.get("estado") in ("Cancelado", "Cancelada") for o in orders)
     st.markdown("---")
     st.markdown(f"## 🧭 Ruta {safe_text(route_id)}")
-    status = route.get("estado", "Asignada")
     st.markdown(f'<span class="pill">{safe_text(status)}</span>', unsafe_allow_html=True)
+
     m1, m2, m3 = st.columns(3)
     m1.metric("Pedidos", total)
     m2.metric("Entregados", delivered)
     m3.metric("Novedades", incidents)
+
     if route.get("distancia_metros"):
         st.caption(f"Distancia estimada: {route['distancia_metros']/1000:.1f} km · Duración estimada: {int(route.get('duracion_segundos',0)/60)} min")
     if route.get("url_google_maps"):
-        st.link_button("🗺️ Abrir ruta en Google Maps", route["url_google_maps"], use_container_width=True)
+        st.link_button("🗺️ Abrir ruta completa en Google Maps", route["url_google_maps"], use_container_width=True)
 
     if status == "Asignada":
         st.warning("Confirma que recibiste los paquetes antes de salir.")
@@ -223,7 +238,9 @@ for route in routes:
                     "recogida_confirmada_por": courier["id"]
                 })
                 for order in orders:
-                    if order.get("estado") not in ("Entregado", "Novedad"):
+                    order_state = order.get("estado")
+                    assigned_to = order.get("mensajero_id")
+                    if order_state not in ("Entregado", "Novedad", "Cancelado", "Cancelada") and assigned_to in (None, "", courier["id"]):
                         batch.update(db.collection("pedidos").document(str(order["numero"])), {
                             "estado": "En camino",
                             "recogido": True,
@@ -238,75 +255,139 @@ for route in routes:
                 st.error("No se pudo registrar la salida.")
                 st.caption(str(exc))
 
-    for idx, order in enumerate(orders, start=1):
+    if active_orders:
+        # La primera entrega activa de la ruta es la única que se presenta.
+        order = active_orders[0]
         number = str(order.get("numero", ""))
         state = order.get("estado", "Pendiente")
+        position = next((i for i, item in enumerate(orders) if str(item.get("numero", "")) == number), 0) + 1
+
+        st.markdown("### 📦 Tu siguiente entrega")
+        st.caption(f"Pedido {position} de {total} · Al guardar el resultado aparecerá el siguiente")
         with st.container(border=True):
-            st.markdown(f"### {idx}. Pedido {safe_text(number)}")
-            st.markdown(f"**{safe_text(order.get('nombre'))}** · {safe_text(state)}")
-            st.write("📍", ", ".join(str(order.get(k, "")).strip() for k in ("direccion", "barrio", "ciudad") if order.get(k)) or "Dirección no registrada")
+            st.markdown(f"## Pedido {safe_text(number)}")
+            st.markdown(f"**{safe_text(order.get('nombre'))}**")
+            st.markdown(f'<span class="pill">{safe_text(state)}</span>', unsafe_allow_html=True)
+
+            address = ", ".join(str(order.get(k, "")).strip() for k in ("direccion", "barrio", "ciudad") if order.get(k))
+            st.write("📍", address or "Dirección no registrada")
             if order.get("referencia"):
                 st.caption("Referencia: " + safe_text(order.get("referencia")))
             if order.get("telefono"):
                 phone_clean = "".join(c for c in str(order.get("telefono")) if c.isdigit())
                 st.link_button("📲 Contactar por WhatsApp", f"https://wa.me/{phone_clean}", use_container_width=True)
-            st.write("💵 Cobrar: **" + fmt_cop(order.get("valor")) + "**")
+
+            order_value = order.get("valor", 0)
+            st.write("💵 Valor del pedido: **" + fmt_cop(order_value) + "**")
             st.link_button("➡️ Navegar a este cliente", maps_url(order), use_container_width=True)
 
-            if state == "Entregado":
-                st.success("Entrega completada")
-            else:
-                with st.form(f"delivery_{route_id}_{number}"):
-                    new_state = st.selectbox(
-                        "Resultado de la visita",
-                        ["Entregado", "Novedad"],
-                        index=0 if state != "Novedad" else 1,
-                        key=f"state_{route_id}_{number}"
-                    )
-                    incident_type = st.selectbox(
-                        "Motivo de novedad",
-                        ["Cliente ausente", "No responde", "Dirección incorrecta", "Reprogramar", "Otro"],
-                        key=f"incident_{route_id}_{number}"
-                    )
-                    incident_note = st.text_area("Detalle / observaciones", key=f"note_{route_id}_{number}", placeholder="Describe qué pasó...")
-                    proof_photo = st.file_uploader("Foto de evidencia (opcional)", type=["jpg", "jpeg", "png"], key=f"photo_{route_id}_{number}")
-                    save_delivery = st.form_submit_button("Guardar resultado", type="primary", use_container_width=True)
-                if save_delivery:
-                    try:
-                        changes = {
-                            "estado": new_state,
-                            "estado_actualizado_en": now_iso(),
-                            "actualizado_por_mensajero_id": courier["id"],
-                            "actualizado_por_mensajero_nombre": courier["nombre"]
-                        }
-                        if new_state == "Novedad":
-                            changes.update({
-                                "novedad_tipo": incident_type,
-                                "novedad_detalle": incident_note.strip()
-                            })
-                        else:
-                            changes.update({
-                                "entregado_en": now_iso(),
-                                "novedad_tipo": None,
-                                "novedad_detalle": None
-                            })
-                        if proof_photo is not None:
-                            st.warning("La foto se seleccionó, pero la subida persistente de evidencia requiere configurar Cloud Storage. No se guardará el archivo en Firestore.")
-                        update_order_and_route(db, number, changes)
-                        st.success(f"Pedido {number}: {new_state.lower()} registrado.")
-                        st.rerun()
-                    except Exception as exc:
-                        st.error("No se pudo guardar el resultado de la entrega.")
-                        st.caption(str(exc))
+            with st.form(f"delivery_{route_id}_{number}"):
+                new_state = st.radio(
+                    "Resultado de la visita",
+                    ["Entregado", "Novedad"],
+                    horizontal=True,
+                    key=f"state_{route_id}_{number}"
+                )
+                incident_type = st.selectbox(
+                    "Motivo de novedad",
+                    ["Cliente ausente", "No responde", "Dirección incorrecta", "Cliente solicita reprogramar", "Cliente solicita cancelar", "Producto rechazado", "Otro"],
+                    key=f"incident_{route_id}_{number}"
+                )
+                incident_note = st.text_area(
+                    "Detalle / observaciones",
+                    key=f"note_{route_id}_{number}",
+                    placeholder="Describe qué pasó..."
+                )
+                cash_collected = st.checkbox(
+                    "Confirmo que recibí el pago del cliente",
+                    key=f"cash_{route_id}_{number}"
+                )
+                cash_amount = st.number_input(
+                    "Valor recaudado (COP)",
+                    min_value=0,
+                    value=max(0, int(order_value or 0)),
+                    step=1000,
+                    key=f"cash_amount_{route_id}_{number}"
+                )
+                proof_photo = st.file_uploader(
+                    "Foto de evidencia (opcional)",
+                    type=["jpg", "jpeg", "png"],
+                    key=f"photo_{route_id}_{number}"
+                )
+                save_delivery = st.form_submit_button(
+                    "Guardar resultado y continuar",
+                    type="primary",
+                    use_container_width=True
+                )
 
-    if status == "En camino" and delivered + incidents == total:
-        st.success("Todos los pedidos tienen resultado registrado. Puedes finalizar la ruta.")
+            if save_delivery:
+                try:
+                    if new_state == "Novedad" and not incident_note.strip() and incident_type == "Otro":
+                        st.error("Describe la novedad para que administración pueda gestionarla.")
+                        st.stop()
+
+                    timestamp = now_iso()
+                    changes = {
+                        "estado": new_state,
+                        "estado_actualizado_en": timestamp,
+                        "actualizado_por_mensajero_id": courier["id"],
+                        "actualizado_por_mensajero_nombre": courier["nombre"]
+                    }
+
+                    if new_state == "Novedad":
+                        changes.update({
+                            "novedad_tipo": incident_type,
+                            "novedad_detalle": incident_note.strip(),
+                            "novedad_estado_gestion": "Pendiente de revisión",
+                            "novedad_reportada_en": timestamp,
+                            "requiere_gestion_humana": True
+                        })
+                    else:
+                        changes.update({
+                            "entregado_en": timestamp,
+                            "novedad_tipo": None,
+                            "novedad_detalle": None,
+                            "requiere_gestion_humana": False,
+                            "cobro_registrado": bool(cash_collected),
+                            "valor_recaudado": int(cash_amount) if cash_collected else 0,
+                            "cobro_registrado_en": timestamp if cash_collected else None,
+                            "cobro_registrado_por": courier["id"] if cash_collected else None
+                        })
+
+                    if proof_photo is not None:
+                        st.warning("La foto se seleccionó, pero la subida persistente de evidencia requiere configurar Cloud Storage. No se guardará el archivo en Firestore.")
+
+                    update_order_and_route(db, number, changes)
+                    st.success(f"Pedido {number}: {new_state.lower()} registrado.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error("No se pudo guardar el resultado de la entrega.")
+                    st.caption(str(exc))
+    else:
+        st.success("No tienes más entregas activas en esta ruta.")
+        st.caption("Las entregas completadas, las novedades y los pedidos cancelados no se muestran como siguiente entrega.")
+
+    # El resumen aparece cuando ya no quedan entregas activas.
+    route_cash = sum(int(o.get("valor_recaudado", 0) or 0) for o in orders)
+    if status == "En camino" and not active_orders:
+        st.success("Ya no quedan pedidos activos en esta ruta.")
+        st.markdown("### 🧾 Resumen de ruta")
+        a, b, c, d = st.columns(4)
+        a.metric("Entregados", delivered)
+        b.metric("Novedades", incidents)
+        c.metric("Cancelados", cancelled)
+        d.metric("Dinero registrado", fmt_cop(route_cash))
+
         if st.button("🏁 Finalizar ruta", key=f"finish_{route_id}", use_container_width=True):
             try:
                 db.collection("rutas").document(route_id).update({
                     "estado": "Finalizada",
                     "finalizada_en": now_iso(),
-                    "finalizada_por": courier["id"]
+                    "finalizada_por": courier["id"],
+                    "resumen_entregados": delivered,
+                    "resumen_novedades": incidents,
+                    "resumen_cancelados": cancelled,
+                    "resumen_valor_recaudado": route_cash
                 })
                 st.success("Ruta finalizada.")
                 st.rerun()
