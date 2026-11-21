@@ -1533,6 +1533,7 @@ else:
             for m in mensajeros_registrados:
                 col_nombre, col_tel, col_estado = st.columns([3, 2, 1.5])
                 col_nombre.write(f"**{m['nombre']}**")
+                col_nombre.caption(f"ID del mensajero: {m['id']}")
                 col_tel.write(m.get("telefono", ""))
                 estado_m = col_estado.selectbox(
                     "Estado", ["Activo", "Inactivo"],
