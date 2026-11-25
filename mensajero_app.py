@@ -34,8 +34,19 @@ html, body, [data-testid="stAppViewContainer"], .stApp {
 }
 .block-container {
     max-width: 680px;
-    padding: 1rem 1rem 2rem;
+    padding: 2.5rem 1rem 2rem;
 }
+.encanto-note {
+    padding: 14px 15px;
+    margin: 8px 0 14px;
+    border-radius: 13px;
+    border: 1px solid #dfcef2;
+    background: #f2eaff !important;
+    color: #342044 !important;
+    font-size: 1rem;
+    line-height: 1.5;
+}
+.encanto-note * { color: #342044 !important; }
 [data-testid="stMarkdownContainer"],
 [data-testid="stMarkdownContainer"] p,
 [data-testid="stMarkdownContainer"] li,
@@ -176,21 +187,24 @@ input::placeholder, textarea::placeholder {
     background: #fff !important;
 }
 /* Avisos de Streamlit: fondos claros y texto oscuro legible. */
-[data-testid="stAlert"] {
+[data-testid="stAlert"],
+[data-testid="stAlert"] > div,
+[data-testid="stAlert"] [data-testid="stAlertContent"],
+[data-testid="stAlert"] [data-testid="stMarkdownContainer"],
+[data-testid="stAlert"] [role="alert"] {
     border-radius: 13px !important;
     background: #f2eaff !important;
+    background-color: #f2eaff !important;
     color: #342044 !important;
-    border: 1px solid #dfcef2 !important;
+    border-color: #dfcef2 !important;
 }
 [data-testid="stAlert"] *,
 [data-testid="stAlert"] p,
 [data-testid="stAlert"] div,
-[data-testid="stAlert"] span {
+[data-testid="stAlert"] span,
+[data-testid="stAlert"] svg {
     color: #342044 !important;
-}
-[data-testid="stAlert"] [data-testid="stAlertContent"],
-[data-testid="stAlert"] [data-testid="stMarkdownContainer"] {
-    background: transparent !important;
+    fill: #63379a !important;
 }
 /* El componente GPS se muestra en un iframe separado: ajustamos su marco
    para evitar la franja negra exterior y que no ocupe todo el ancho. */
@@ -213,7 +227,7 @@ hr {
 /* Ajustes específicos para pantallas pequeñas. */
 @media (max-width: 600px) {
     .block-container {
-        padding: .7rem .75rem 1.5rem !important;
+        padding: 3.5rem .75rem 1.5rem !important;
     }
     .encanto-hero {
         padding: 15px;
@@ -340,7 +354,7 @@ with st.sidebar:
 
 if not st.session_state.courier_session:
     st.subheader("Ingresar")
-    st.info("El ID y el teléfono deben coincidir con el registro de mensajeros de ENCANTO Rutas.")
+    st.markdown('<div class="encanto-note">El ID y el teléfono deben coincidir con el registro de mensajeros de ENCANTO Rutas.</div>', unsafe_allow_html=True)
     with st.form("courier_login"):
         messenger_id = st.text_input("ID de mensajero", placeholder="Ej.: A1B2C3D4E5F6")
         phone = st.text_input("Teléfono registrado", placeholder="Número registrado en el panel")
