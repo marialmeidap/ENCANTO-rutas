@@ -1829,3 +1829,171 @@ if st.session_state.get("etiqueta"):
 
 
 # ============================================================
+# FASE 2 — MAPA GPS DE MENSAJEROS ACTIVOS
+# ============================================================
+
+st.divider()
+st.header("📍 Seguimiento GPS de domiciliarios")
+st.caption(
+    "Muestra la última ubicación registrada de los mensajeros "
+    "que tienen una ruta activa."
+)
+
+if db is None:
+    st.warning("No hay conexión a Firestore.")
+else:
+    try:
+        # 1. Identificar mensajeros con rutas activas.
+        estados_activos = {"Asignada", "En camino"}
+        mensajeros_activos = {}
+
+        for doc_ruta in db.collection("rutas").stream():
+            ruta = doc_ruta.to_dict() or {}
+            estado_ruta = ruta.get("estado", "Asignada")
+            mensajero_id = ruta.get("mensajero_id")
+
+            if mensajero_id and estado_ruta in estados_activos:
+                mensajeros_activos[str(mensajero_id)] = True
+
+        # 2. Leer las últimas ubicaciones guardadas en Firestore.
+        ubicaciones = []
+
+        for doc_ubicacion in db.collection(
+            "ubicaciones_mensajeros"
+        ).stream():
+
+            ubicacion = doc_ubicacion.to_dict() or {}
+            mensajero_id = str(
+                ubicacion.get("mensajero_id", doc_ubicacion.id)
+            )
+
+            # No mostrar ubicaciones de mensajeros sin ruta activa.
+            if mensajero_id not in mensajeros_activos:
+                continue
+
+            lat = ubicacion.get("latitud")
+            lon = ubicacion.get("longitud")
+
+            try:
+                lat = float(lat)
+                lon = float(lon)
+            except (TypeError, ValueError):
+                continue
+
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                continue
+
+            ubicaciones.append({
+                "id": mensajero_id,
+                "nombre": ubicacion.get(
+                    "mensajero_nombre", mensajero_id
+                ),
+                "latitud": lat,
+                "longitud": lon,
+                "actualizado_en": ubicacion.get("actualizado_en"),
+                "precision": ubicacion.get("precision_metros")
+            })
+
+        # 3. Dibujar el mapa centrado en Cali.
+        mapa = folium.Map(
+            location=[3.4522, -76.5339],
+            zoom_start=12
+        )
+
+        for item in ubicaciones:
+            nombre = html.escape(str(item["nombre"]))
+            hora_texto = "No disponible"
+            minutos_transcurridos = None
+
+            marca_tiempo = item.get("actualizado_en")
+
+            if marca_tiempo:
+                try:
+                    fecha = datetime.fromisoformat(
+                        str(marca_tiempo).replace("Z", "+00:00")
+                    )
+
+                    if fecha.tzinfo is None:
+                        fecha = fecha.replace(
+                            tzinfo=ZoneInfo("America/Bogota")
+                        )
+
+                    ahora = datetime.now(
+                        ZoneInfo("America/Bogota")
+                    )
+                    minutos_transcurridos = max(
+                        0, int((ahora - fecha).total_seconds() / 60)
+                    )
+                    hora_texto = fecha.astimezone(
+                        ZoneInfo("America/Bogota")
+                    ).strftime("%d/%m/%Y %I:%M:%S %p")
+
+                except (ValueError, TypeError):
+                    pass
+
+            if minutos_transcurridos is None:
+                vigencia = "No se pudo verificar la antigüedad"
+            elif minutos_transcurridos <= 2:
+                vigencia = "Actualización reciente"
+            else:
+                vigencia = (
+                    f"Ubicación de hace {minutos_transcurridos} min"
+                )
+
+            precision = item.get("precision")
+            precision_texto = (
+                f"{float(precision):.0f} m"
+                if precision is not None
+                else "No disponible"
+            )
+
+            popup_html = (
+                f"<b>{nombre}</b><br>"
+                f"Última actualización: {hora_texto}<br>"
+                f"Vigencia: {vigencia}<br>"
+                f"Precisión GPS: {precision_texto}"
+            )
+
+            folium.Marker(
+                location=[item["latitud"], item["longitud"]],
+                tooltip=str(item["nombre"]),
+                popup=folium.Popup(popup_html, max_width=320),
+                icon=folium.Icon(
+                    color="blue",
+                    icon="info-sign"
+                )
+            ).add_to(mapa)
+
+        st_folium(
+            mapa,
+            width=1200,
+            height=500,
+            key="mapa_gps_mensajeros"
+        )
+
+        if ubicaciones:
+            st.success(
+                f"Ubicaciones encontradas: {len(ubicaciones)}"
+            )
+        elif mensajeros_activos:
+            st.info(
+                "Hay rutas activas, pero aún no hay ubicaciones GPS "
+                "válidas. Abre la app del domiciliario y permite "
+                "el acceso a la ubicación."
+            )
+        else:
+            st.info("No hay rutas activas asignadas a mensajeros.")
+
+        st.caption(
+            "El mapa presenta la última posición guardada, "
+            "no garantiza seguimiento continuo. Si la app está "
+            "cerrada o no envía datos, la ubicación puede estar "
+            "desactualizada."
+        )
+
+    except Exception as error:
+        st.error("No fue posible cargar el mapa de domiciliarios.")
+        st.caption(str(error))
+
+
+# ============================================================
