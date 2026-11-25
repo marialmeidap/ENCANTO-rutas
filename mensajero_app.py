@@ -175,8 +175,37 @@ input::placeholder, textarea::placeholder {
     padding: 12px;
     background: #fff !important;
 }
+/* Avisos de Streamlit: fondos claros y texto oscuro legible. */
 [data-testid="stAlert"] {
     border-radius: 13px !important;
+    background: #f2eaff !important;
+    color: #342044 !important;
+    border: 1px solid #dfcef2 !important;
+}
+[data-testid="stAlert"] *,
+[data-testid="stAlert"] p,
+[data-testid="stAlert"] div,
+[data-testid="stAlert"] span {
+    color: #342044 !important;
+}
+[data-testid="stAlert"] [data-testid="stAlertContent"],
+[data-testid="stAlert"] [data-testid="stMarkdownContainer"] {
+    background: transparent !important;
+}
+/* El componente GPS se muestra en un iframe separado: ajustamos su marco
+   para evitar la franja negra exterior y que no ocupe todo el ancho. */
+iframe[title*="streamlit_geolocation"],
+iframe[title*="geolocation"] {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 64px !important;
+    min-height: 64px !important;
+    border: 0 !important;
+    border-radius: 12px !important;
+    background: transparent !important;
+    color-scheme: light !important;
+    overflow: hidden !important;
 }
 hr {
     border-color: #e7d9f0 !important;
