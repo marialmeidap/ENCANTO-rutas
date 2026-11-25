@@ -15,17 +15,206 @@ DATABASE_ID = "encanto-rutas-db"
 TZ = ZoneInfo("America/Bogota")
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 
+# Interfaz móvil: alto contraste, controles táctiles y tarjetas compactas.
 st.markdown("""
 <style>
-.stApp {background:linear-gradient(180deg,#fff8fc 0%,#f6f1ff 58%,#ffffff 100%);}
-.block-container {max-width:760px;padding-top:1.3rem;padding-bottom:2.5rem;}
-.encanto-hero {padding:22px;border-radius:20px;color:#fff;background:linear-gradient(115deg,#4a247b,#8750c2 60%,#e65a9c);margin-bottom:18px;}
-.encanto-hero h1 {color:#fff;font-size:1.8rem;margin:0;}
-.encanto-hero p {color:#f9edff;margin:6px 0 0;}
-div[data-testid="stMetric"] {background:#fff;border:1px solid #eadcf7;padding:12px;border-radius:15px;}
-.stButton button,.stLinkButton a {border-radius:12px;font-weight:650;}
-.order-card {padding:14px;border:1px solid #eadcf7;background:#fff;border-radius:15px;margin:8px 0;}
-.pill {display:inline-block;padding:4px 9px;border-radius:999px;background:#f0e7ff;color:#522d86;font-size:.8rem;font-weight:700;}
+/* Forzar colores legibles aunque el navegador o Streamlit use tema oscuro. */
+:root {
+    color-scheme: light;
+}
+html, body, [data-testid="stAppViewContainer"], .stApp {
+    background: #fffafd !important;
+    color: #292033 !important;
+}
+[data-testid="stHeader"] {
+    background: rgba(255,250,253,.96) !important;
+}
+[data-testid="stMain"], [data-testid="stMainBlockContainer"] {
+    color: #292033 !important;
+}
+.block-container {
+    max-width: 680px;
+    padding: 1rem 1rem 2rem;
+}
+[data-testid="stMarkdownContainer"],
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] h1,
+[data-testid="stMarkdownContainer"] h2,
+[data-testid="stMarkdownContainer"] h3,
+[data-testid="stMarkdownContainer"] h4,
+[data-testid="stText"],
+[data-testid="stCaptionContainer"],
+.stCaption,
+label,
+[data-testid="stWidgetLabel"] p {
+    color: #292033 !important;
+}
+[data-testid="stCaptionContainer"], .stCaption {
+    color: #62566b !important;
+    font-size: .9rem !important;
+    line-height: 1.45 !important;
+}
+.encanto-hero {
+    padding: 18px 18px;
+    border-radius: 18px;
+    color: #fff !important;
+    background: linear-gradient(115deg, #4a247b, #8750c2 62%, #d94f98);
+    margin: 0 0 18px;
+    box-shadow: 0 4px 14px rgba(74,36,123,.12);
+}
+.encanto-hero h1 {
+    color: #fff !important;
+    font-size: 1.55rem;
+    line-height: 1.2;
+    margin: 0;
+}
+.encanto-hero p {
+    color: #fff !important;
+    font-size: .98rem;
+    line-height: 1.4;
+    margin: 7px 0 0;
+}
+h1, h2, h3 {
+    color: #342044 !important;
+    letter-spacing: -.02em;
+}
+h2 { font-size: 1.35rem !important; }
+h3 { font-size: 1.12rem !important; }
+div[data-testid="stMetric"] {
+    background: #fff !important;
+    border: 1px solid #e5d7f1;
+    padding: 10px 12px;
+    border-radius: 14px;
+    gap: 4px;
+}
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] [data-testid="stMetricLabel"],
+div[data-testid="stMetric"] [data-testid="stMetricValue"],
+div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+    color: #342044 !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background: #fff !important;
+    border: 1px solid #e7d9f0 !important;
+    border-radius: 16px !important;
+    padding: 12px !important;
+}
+.pill {
+    display: inline-block;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: #f0e7ff;
+    color: #522d86 !important;
+    font-size: .85rem;
+    font-weight: 750;
+    border: 1px solid #e2d0fa;
+}
+/* Botones con buen contraste y altura cómoda para tocar en el celular. */
+.stButton button,
+.stLinkButton a,
+[data-testid="stFormSubmitButton"] button {
+    width: 100%;
+    min-height: 48px;
+    border-radius: 13px !important;
+    font-weight: 700 !important;
+    font-size: 1rem !important;
+    border: 1px solid #63379a !important;
+    background: #63379a !important;
+    color: #fff !important;
+    box-shadow: none !important;
+    padding: .65rem .8rem !important;
+}
+.stButton button p,
+.stLinkButton a p,
+[data-testid="stFormSubmitButton"] button p {
+    color: #fff !important;
+}
+.stButton button:hover,
+.stLinkButton a:hover,
+[data-testid="stFormSubmitButton"] button:hover {
+    background: #4a247b !important;
+    border-color: #4a247b !important;
+    color: #fff !important;
+}
+.stButton button:focus,
+.stLinkButton a:focus,
+[data-testid="stFormSubmitButton"] button:focus {
+    box-shadow: 0 0 0 3px #e3d1f5 !important;
+}
+/* Campos de formulario: fondo blanco y texto oscuro, también en iPhone. */
+input, textarea,
+[data-baseweb="input"] input,
+[data-baseweb="textarea"] textarea {
+    background: #fff !important;
+    color: #292033 !important;
+    -webkit-text-fill-color: #292033 !important;
+    border-color: #cbbbd9 !important;
+}
+input::placeholder, textarea::placeholder {
+    color: #756980 !important;
+    -webkit-text-fill-color: #756980 !important;
+    opacity: 1 !important;
+}
+[data-baseweb="select"] > div {
+    background: #fff !important;
+    color: #292033 !important;
+    border-color: #cbbbd9 !important;
+}
+[data-baseweb="select"] *, [data-baseweb="radio"] label,
+[data-testid="stCheckbox"] label {
+    color: #292033 !important;
+}
+[data-baseweb="radio"] label, [data-testid="stCheckbox"] label {
+    min-height: 35px;
+    align-items: center;
+}
+[data-testid="stForm"] {
+    border: 1px solid #eadff2;
+    border-radius: 14px;
+    padding: 12px;
+    background: #fff !important;
+}
+[data-testid="stAlert"] {
+    border-radius: 13px !important;
+}
+hr {
+    border-color: #e7d9f0 !important;
+}
+/* Ajustes específicos para pantallas pequeñas. */
+@media (max-width: 600px) {
+    .block-container {
+        padding: .7rem .75rem 1.5rem !important;
+    }
+    .encanto-hero {
+        padding: 15px;
+        border-radius: 15px;
+        margin-bottom: 14px;
+    }
+    .encanto-hero h1 {
+        font-size: 1.35rem;
+    }
+    [data-testid="stMarkdownContainer"] h2 {
+        font-size: 1.22rem !important;
+    }
+    [data-testid="stMarkdownContainer"] h3 {
+        font-size: 1.05rem !important;
+    }
+    div[data-testid="stMetric"] {
+        padding: 8px 7px;
+    }
+    div[data-testid="stMetric"] [data-testid="stMetricLabel"] {
+        font-size: .78rem !important;
+    }
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        font-size: 1.25rem !important;
+    }
+    .stButton button, .stLinkButton a,
+    [data-testid="stFormSubmitButton"] button {
+        min-height: 46px;
+        font-size: .96rem !important;
+    }
+}
 </style>
 <div class="encanto-hero"><h1>🛵 ENCANTO Mensajero</h1><p>Tus rutas, tus entregas y tus novedades en un solo lugar.</p></div>
 """, unsafe_allow_html=True)
@@ -275,7 +464,7 @@ for route in routes:
                 st.caption("Referencia: " + safe_text(order.get("referencia")))
             if order.get("telefono"):
                 phone_clean = "".join(c for c in str(order.get("telefono")) if c.isdigit())
-                st.link_button("📲 Contactar por WhatsApp", f"https://wa.me/{phone_clean}", use_container_width=True)
+                st.link_button("📲 WhatsApp del cliente", f"https://wa.me/{phone_clean}", use_container_width=True)
 
             order_value = order.get("valor", 0)
             st.write("💵 Valor del pedido: **" + fmt_cop(order_value) + "**")
