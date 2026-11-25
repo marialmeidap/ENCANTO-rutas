@@ -47,6 +47,54 @@ html, body, [data-testid="stAppViewContainer"], .stApp {
     line-height: 1.5;
 }
 .encanto-note * { color: #342044 !important; }
+.gps-cta {
+    margin: 10px 0 14px;
+    padding: 18px 14px;
+    text-align: center;
+    border-radius: 20px;
+    border: 2px solid #d783f3;
+    background: linear-gradient(145deg, #fff7ff 0%, #f3e4ff 100%);
+    box-shadow: 0 5px 18px rgba(128, 50, 171, .12);
+}
+.gps-cta-icon {
+    font-size: 2.2rem;
+    line-height: 1.2;
+    margin-bottom: 5px;
+}
+.gps-cta-title {
+    color: #4a247b !important;
+    font-size: 1.25rem;
+    line-height: 1.3;
+    font-weight: 800;
+    margin-bottom: 14px;
+}
+.gps-cta-button {
+    background: linear-gradient(110deg, #54228b, #9a36b6);
+    color: #fff !important;
+    padding: 15px 12px;
+    border-radius: 14px;
+    font-size: 1rem;
+    line-height: 1.35;
+    font-weight: 800;
+    box-shadow: 0 4px 10px rgba(84, 34, 139, .22);
+    margin-bottom: 12px;
+}
+.gps-cta-help {
+    color: #44334f !important;
+    font-size: .96rem;
+    line-height: 1.5;
+    margin: 4px 0 12px;
+}
+.gps-cta-help b { color: #4a247b !important; }
+.gps-cta-privacy {
+    background: #f0e0fb;
+    color: #4a247b !important;
+    padding: 11px;
+    border-radius: 12px;
+    font-size: .9rem;
+    line-height: 1.4;
+    text-align: left;
+}
 [data-testid="stMarkdownContainer"],
 [data-testid="stMarkdownContainer"] p,
 [data-testid="stMarkdownContainer"] li,
@@ -387,7 +435,15 @@ if st.button("🔄 Actualizar mis rutas", use_container_width=True):
     st.rerun()
 
 st.markdown("### 📍 Mi ubicación GPS")
-st.caption("La ubicación se consulta desde el navegador mientras esta pantalla está abierta. Permite el acceso a la ubicación cuando el celular lo solicite.")
+st.markdown("""
+<div class="gps-cta">
+  <div class="gps-cta-icon">📍</div>
+  <div class="gps-cta-title">Activa tu ubicación para continuar</div>
+  <div class="gps-cta-button">📍 PERMITIR UBICACIÓN PARA CONTINUAR</div>
+  <div class="gps-cta-help">Toca el control de ubicación que aparece justo debajo y, cuando tu iPhone lo pregunte, selecciona <b>Permitir</b>.</div>
+  <div class="gps-cta-privacy">🔒 Tu ubicación se compartirá con administración mientras uses la app.</div>
+</div>
+""", unsafe_allow_html=True)
 gps = streamlit_geolocation()
 if isinstance(gps, dict) and gps.get("latitude") is not None and gps.get("longitude") is not None:
     try:
